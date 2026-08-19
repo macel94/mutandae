@@ -94,6 +94,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
           tags: |
             ghcr.io/macel94/mutandae:sha-${{ github.sha }}
             ghcr.io/macel94/mutandae:latest
@@ -161,11 +163,7 @@ jobs:
           digest="${IMAGE_DIGEST#sha256:}"
           cat > mutandae.provenance.json <<EOF
           {
-            "_type": "https://in-toto.io/Statement/v1",
-            "subject": [{"name": "${IMAGE_NAME}", "digest": {"sha256": "${digest}"}}],
-            "predicateType": "https://slsa.dev/provenance/v1",
-            "predicate": {
-              "buildDefinition": {
+            "buildDefinition": {
                 "buildType": "https://actions.github.io/buildtypes/workflow/v1",
                 "externalParameters": {
                   "workflow": {
@@ -186,7 +184,6 @@ jobs:
                 }
               }
             }
-          }
           EOF
 
       - name: Attest image provenance with Cosign
