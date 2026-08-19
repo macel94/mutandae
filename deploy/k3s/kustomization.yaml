@@ -10,5 +10,5 @@ resources:
 images:
   - name: mutandae
     newName: ghcr.io/macel94/mutandae
-    newTag: sha-332456628cd76487b24e40359c84d996a0af49d6
-    digest: sha256:35ca4033a07426eaba3bc42ecf6458253c90c6fa49c3337d3cc198ec3a127af6
+    newTag: sha-a9ad014a1e3514f5999ec2ca6d63e8eddc39ae8f
+    digest: sha256:6cf3c224f0659775f1c2fc53a6e1c618fcc04b0e5436e61fde615c1298486cdb
