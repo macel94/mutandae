@@ -192,17 +192,17 @@ jobs:
       - name: Attest image provenance with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --predicate mutandae.provenance.json --type https://slsa.dev/provenance/v1 "$IMAGE"
+        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.provenance.json --type https://slsa.dev/provenance/v1 "$IMAGE"
 
       - name: Attest image SBOM with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --predicate mutandae.sbom.cdx.json --type cyclonedx "$IMAGE"
+        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.sbom.cdx.json --type cyclonedx "$IMAGE"
 
       - name: Attest native production vulnerability decision with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --predicate mutandae.vulnerability-decision.json --type https://belacca.com/attestations/vulnerability/v1 "$IMAGE"
+        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.vulnerability-decision.json --type https://belacca.com/attestations/vulnerability/v1 "$IMAGE"
 
       - name: Record deployed immutable image
         shell: bash
