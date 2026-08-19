@@ -20,16 +20,16 @@ interfaces had to be made compatible.
 - Both hosts serve the same Mutandae deployment. HTTP redirects to HTTPS.
 - Certificate: `mutandae-tls`, issued by `letsencrypt-cloudflare`, covering both
   hostnames.
-- Final source/deployment history:
+- Source-side delivery history:
   - `4ed7eb0` — fixed valid SLSA predicate generation and legacy Cosign output.
-  - `7347e2a` — generated immutable image deployment pin.
-- Final image:
-
-  ```text
-  ghcr.io/macel94/mutandae:sha-4ed7eb016df617ca485ec3ed0e4d7e58578b1061@sha256:da80aaa6a6b277b583d28e8b15fa579b05f6f6ca4b5b3a43ca8734d9ea077b9d
-  ```
-
-The GitOps policy change is `7eaaa96` in `belacca-gitops`.
+  - `7347e2a` — first generated immutable image deployment pin.
+  - `c773943` — added this delivery record.
+- The current generated image tag and digest are the values in
+  [`deploy/k3s/kustomization.yaml`](../deploy/k3s/kustomization.yaml). That
+  file is authoritative because each successful publish may replace the
+  generated pin.
+- The cluster-side policy and rollout record is in
+  `belacca-gitops/docs/MUTANDAE-NATIVE-DELIVERY.md`.
 
 ## Problems solved
 
@@ -200,18 +200,16 @@ Changing only the workflow would reuse the same image digest. That can leave
 old malformed attestations attached to the same immutable image and makes
 verification ambiguous.
 
-The workflow now passes `BUILD_SHA` to the Docker build, and the final image
-records it as the non-secret OCI revision label:
+The workflow now passes `BUILD_SHA` to the Docker build, and each published
+image records it as the non-secret OCI revision label:
 
 ```dockerfile
 LABEL org.opencontainers.image.revision=$BUILD_SHA
 ```
 
-The corrected workflow therefore published a fresh digest:
-
-```text
-sha256:da80aaa6a6b277b583d28e8b15fa579b05f6f6ca4b5b3a43ca8734d9ea077b9d
-```
+The corrected workflow published a fresh digest and wrote it to
+`deploy/k3s/kustomization.yaml`. Future generated commits may update that
+value without changing the compatibility contract.
 
 ### 8. Generated deployment commits race with local source checkouts
 

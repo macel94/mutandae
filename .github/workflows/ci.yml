@@ -12,7 +12,6 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'go.mod'
-      - 'docs/**'
       - 'scripts/**'
   pull_request:
     branches:
