@@ -4,6 +4,8 @@
 
 The visual and protocol mark is **μTandae**. Technical identifiers use the ASCII spelling `mutandae`.
 
+**Pronunciation:** use the Classical Latin reading **moo-TAHN-dye** (`mūtandae`), with the final `ae` pronounced as the Latin diphthong *ai*. Do not anglicize the final `ae` to an English “day” sound.
+
 > **Mutandae — Govern what must change.**
 
 ## Status
@@ -59,9 +61,9 @@ See [MVP Objectives](docs/mvp-objectives.md) and [Open-Core Boundary](docs/open-
 | Visual wordmark | **μTandae** |
 | Protocol name | **μTandae Protocol** / **Mutandae Protocol** |
 | Repository, package, API, and URL spelling | `mutandae` |
-| Chosen pronunciation | **moo-TAN-day** |
+| Chosen pronunciation | **moo-TAHN-dye** (Classical Latin `mūtandae`) |
 
-The name is inspired by the Latin root *mutare*, associated with changing or altering, and by the product idea of things that are due for controlled change. The visual identity may draw on the Greek letter μ and the Japanese concept 丹田 (*tanden*), but `μTandae` is a creative brand treatment—not a literal Greek/Japanese translation.
+The name is inspired by the Latin root *mutare*, associated with changing or altering, and by the product idea of things that are due for controlled change. For pronunciation, treat the word as Latin: *mūtandae* is approximately **moo-TAHN-dye**; keep the final *ae* as the Latin “ai” diphthong. The visual identity may draw on the Greek letter μ and the Japanese concept 丹田 (*tanden*), but `μTandae` is a creative brand treatment—not a literal Greek/Japanese translation.
 
 Name availability has been provisionally screened across public web results, domains, GitHub, npm, PyPI, and UK company records. This is not legal trademark clearance. A professional trademark search is required before commercial launch.
 
@@ -71,14 +73,33 @@ See [Brand Decisions](docs/brand-decisions.md).
 
 ```text
 .
-├── README.md
-├── .gitignore
+├── .github/
+│   ├── dependabot.yml         # Go, Docker, and Actions updates
+│   └── workflows/ci.yml       # Test, build, and GHCR publish pipeline
+├── cmd/mutandae/              # Go application entrypoint
+├── internal/lifecycle/        # Provider-neutral lifecycle model and simulator
+├── internal/web/              # HTTP handlers, templates, and CSS
+├── deploy/k3s/                # Later-stage Kubernetes deployment baseline
+├── Dockerfile
+├── go.mod
 └── docs/
     ├── brand-decisions.md
+    ├── implementation.md
     ├── mvp-objectives.md
     ├── open-core-boundary.md
     └── product-objectives.md
 ```
+
+## Run the demo
+
+The first vertical slice is a dependency-free Go server with server-rendered HTML. HTMX handles server interactions and Alpine.js handles local filtering; there is no frontend build step.
+
+```sh
+go run ./cmd/mutandae
+# open http://localhost:8080
+```
+
+See [Implementation Choices](docs/implementation.md) for the architecture, endpoints, tests, container image, GHCR publishing, and future K3s deployment path.
 
 ## Working principles
 

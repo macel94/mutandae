@@ -1,0 +1,31 @@
+{{ define "events" }}
+<div class="activity-content">
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Audit trail</p>
+      <h2>{{ .Identity.Name }}</h2>
+      <p class="muted">{{ .Identity.Owner }} · {{ .Identity.Workload }}</p>
+    </div>
+    <span class="badge badge-{{ .Identity.UrgencyClass }}"><span class="badge-dot"></span>{{ .Identity.UrgencyLabel }}</span>
+  </div>
+  <div class="identity-summary">
+    <div><span>Provider</span><strong>{{ .Identity.Provider }}</strong></div>
+    <div><span>Environment</span><strong>{{ .Identity.Environment }}</strong></div>
+    <div><span>Last rotation</span><strong>{{ .Identity.LastRotatedLabel }}</strong></div>
+  </div>
+  <div class="timeline">
+    {{ range .Events }}
+    <article class="timeline-event">
+      <span class="timeline-marker {{ eventClass .Outcome }}"></span>
+      <div class="timeline-body">
+        <div class="event-meta"><strong>{{ .Type }}</strong><time>{{ formatTime .At }}</time></div>
+        <p>{{ .Summary }}</p>
+        <small>{{ .Actor }} <span>·</span> {{ .Outcome }}</small>
+      </div>
+    </article>
+    {{ else }}
+    <p class="muted">No lifecycle events recorded yet.</p>
+    {{ end }}
+  </div>
+</div>
+{{ end }}

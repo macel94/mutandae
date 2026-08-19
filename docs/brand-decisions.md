@@ -21,11 +21,11 @@ The canonical technical spelling is **`mutandae`**.
 
 ## Pronunciation
 
-The chosen pronunciation is:
+Read the product name as Latin, not as an English word:
 
-> **moo-TAN-day**
+> **moo-TAHN-dye**
 
-This pronunciation should be used consistently in demos, presentations, and product introductions.
+The spelling is *mūtandae* for pronunciation guidance: the first two long vowels are approximated by “moo” and “tahn,” and the final Latin diphthong *ae* is approximated by “ai” or “eye.” Do not anglicize the final *ae* to an English “day” sound. This pronunciation should be used consistently in demos, presentations, documentation, and product introductions.
 
 ## Meaning and inspiration
 

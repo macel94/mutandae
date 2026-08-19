@@ -1,0 +1,115 @@
+{{ define "index" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Mutandae machine identity lifecycle control plane demo">
+  <title>Mutandae · Machine identity control plane</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.16.2/dist/cdn.min.js"></script>
+</head>
+<body>
+  <div class="app-shell" x-data="{ filter: '', status: 'all', navOpen: false }">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Mutandae home">
+        <span class="brand-symbol">μ</span><span>Mutandae</span>
+      </a>
+      <button class="menu-button" type="button" aria-label="Toggle navigation" x-on:click="navOpen = !navOpen">Menu</button>
+      <nav class="topnav" x-bind:class="{ 'is-open': navOpen }">
+        <a class="active" href="#overview">Overview</a>
+        <a href="#inventory">Identities</a>
+        <a href="#activity-panel">Audit trail</a>
+        <span class="environment-chip"><span class="status-dot"></span> Simulator</span>
+      </nav>
+    </header>
+
+    <main id="overview">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Machine identity control plane <span class="eyebrow-line"></span></p>
+          <h1>Govern what<br><em>must change.</em></h1>
+          <p class="hero-lede">A clear lifecycle for non-human identities. See ownership, expiry, renewal health, and the evidence behind every change.</p>
+          <div class="pronunciation"><span class="pronunciation-label">Say it in Latin</span><strong>moo-TAHN-dye</strong><span class="pronunciation-note">mūtandae · final <i>ae</i> like “ai”</span></div>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="orbit-core"><span>μ</span></div>
+          <span class="orbit-label label-top">renew</span>
+          <span class="orbit-label label-right">verify</span>
+          <span class="orbit-label label-bottom">retire</span>
+        </div>
+      </section>
+
+      <section class="stat-grid" aria-label="Lifecycle summary">
+        <article class="stat-card stat-total">
+          <div class="stat-top"><span class="stat-icon">◌</span><span>Tracked identities</span></div>
+          <strong>{{ .Total }}</strong>
+          <span class="stat-foot">Across the demo tenant</span>
+        </article>
+        <article class="stat-card stat-healthy">
+          <div class="stat-top"><span class="stat-icon">↗</span><span>Renewal healthy</span></div>
+          <strong>{{ .Healthy }}</strong>
+          <span class="stat-foot">No action needed today</span>
+        </article>
+        <article class="stat-card stat-expiring">
+          <div class="stat-top"><span class="stat-icon">◷</span><span>Expiring soon</span></div>
+          <strong>{{ .Expiring }}</strong>
+          <span class="stat-foot">Within the next 30 days</span>
+        </article>
+        <article class="stat-card stat-attention">
+          <div class="stat-top"><span class="stat-icon">!</span><span>Needs attention</span></div>
+          <strong>{{ .Attention }}</strong>
+          <span class="stat-foot">Review before it becomes an incident</span>
+        </article>
+      </section>
+
+      <div class="workspace" id="inventory">
+        <section class="panel inventory-panel" aria-labelledby="inventory-title">
+          <div class="panel-heading inventory-heading">
+            <div>
+              <p class="section-kicker">Lifecycle inventory</p>
+              <h2 id="inventory-title">Machine identities</h2>
+            </div>
+            <button class="button button-secondary" type="button" hx-get="/partials/identities" hx-target="#identity-list" hx-swap="outerHTML">
+              <span class="button-icon">↻</span> Refresh
+            </button>
+          </div>
+          <div class="toolbar">
+            <label class="search-box">
+              <span class="sr-only">Search identities</span>
+              <span class="search-icon">⌕</span>
+              <input type="search" placeholder="Search owner, workload, provider…" x-model="filter">
+              <kbd>/</kbd>
+            </label>
+            <div class="filter-group" role="group" aria-label="Filter by status">
+              <button type="button" x-on:click="status = 'all'" x-bind:class="{ 'selected': status === 'all' }">All</button>
+              <button type="button" x-on:click="status = 'attention'" x-bind:class="{ 'selected': status === 'attention' }">Attention</button>
+              <button type="button" x-on:click="status = 'healthy'" x-bind:class="{ 'selected': status === 'healthy' }">Healthy</button>
+            </div>
+          </div>
+          {{ template "identity-list" . }}
+          <div class="table-note"><span class="status-dot"></span> Simulator data · Last checked {{ .UpdatedAt }}</div>
+        </section>
+
+        <aside class="panel activity-panel" id="activity-panel" aria-live="polite">
+          <div class="empty-activity">
+            <span class="empty-icon">↗</span>
+            <p class="section-kicker">Audit trail</p>
+            <h2>Choose an identity</h2>
+            <p>Inspect lifecycle events, policy decisions, and rotation evidence without leaving the inventory.</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <span>μTandae Protocol · open-core lifecycle demo</span>
+      <span>Provider adapter: <strong>local simulator</strong></span>
+    </footer>
+  </div>
+</body>
+</html>
+{{ end }}

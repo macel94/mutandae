@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mutandae
+  labels:
+    app.kubernetes.io/name: mutandae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mutandae
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mutandae
+    spec:
+      containers:
+        - name: mutandae
+          # Pin this to a published SHA tag or digest before deployment.
+          image: ghcr.io/macel94/mutandae:sha-example
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mutandae
+  labels:
+    app.kubernetes.io/name: mutandae
+spec:
+  selector:
+    app.kubernetes.io/name: mutandae
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
