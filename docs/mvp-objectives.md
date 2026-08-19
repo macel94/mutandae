@@ -118,6 +118,12 @@ The MVP is successful when all of the following are true:
 
 ## Suggested MVP milestones
 
+> **Progress** — Milestones 1–3 are implemented in this repository:
+> the μTandae Protocol (v1), the protocol-native control-plane shell with a
+> simulated Azure adapter, and the public frontend (HTMX dashboard + protocol
+> API). Milestones 4–5 (private Azure renewal boundary and full vertical-slice
+> validation) remain ahead.
+
 ### Milestone 1 — Protocol and domain model
 
 - Define lifecycle states and valid transitions.

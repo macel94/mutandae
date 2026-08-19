@@ -10,7 +10,7 @@ The visual and protocol mark is **μTandae**. Technical identifiers use the ASCI
 
 ## Status
 
-This repository is at the product-definition and architecture-baseline stage. It captures the product thesis, brand decisions, open-core boundary, and Azure-first MVP objectives before implementation begins.
+This repository contains the runnable public layer: the versioned **μTandae Protocol** (`pkg/protocol`), a small control-plane backend that speaks it, a simulated Azure/Entra ID provider adapter, and the open-source frontend — wired as one Azure-first demo.
 
 ## Product thesis
 
@@ -76,13 +76,17 @@ See [Brand Decisions](docs/brand-decisions.md).
 ├── .github/
 │   ├── dependabot.yml         # Go, Docker, and Actions updates
 │   └── workflows/ci.yml       # Test, build, and GHCR publish pipeline
-├── cmd/mutandae/              # Go application entrypoint
-├── internal/lifecycle/        # Provider-neutral lifecycle model and simulator
-├── internal/web/              # HTTP handlers, templates, and CSS
+├── cmd/mutandae/              # Go application entrypoint (composition root)
+├── pkg/protocol/              # μTandae Protocol v1: schemas, envelopes, validation
+├── internal/provider/         # Simulated azure-entra provider adapter
+├── internal/lifecycle/        # Control-plane domain store + adapter boundary
+├── internal/web/              # HTTP handlers, templates, CSS, protocol JSON API
 ├── deploy/k3s/                # Later-stage Kubernetes deployment baseline
 ├── Dockerfile
 ├── go.mod
 └── docs/
+    ├── protocol.md            # μTandae Protocol v1 specification
+    ├── azure-demo.md          # Azure-first demo run guide
     ├── brand-decisions.md
     ├── implementation.md
     ├── mvp-objectives.md
@@ -90,16 +94,23 @@ See [Brand Decisions](docs/brand-decisions.md).
     └── product-objectives.md
 ```
 
-## Run the demo
+## Run the demo (Azure-first)
 
-The first vertical slice is a dependency-free Go server with server-rendered HTML. HTMX handles server interactions and Alpine.js handles local filtering; there is no frontend build step.
+The demo starts from Azure: a simulated Entra ID tenant exposes its application
+registrations, the control plane discovers and governs them over the μTandae
+Protocol, and the frontend renders the lifecycle.
 
 ```sh
 go run ./cmd/mutandae
 # open http://localhost:8080
+# protocol discovery: curl http://localhost:8080/api/v1/
 ```
 
-See [Implementation Choices](docs/implementation.md) for the architecture, endpoints, tests, container image, GHCR publishing, and future K3s deployment path.
+See [docs/azure-demo.md](docs/azure-demo.md) for the walkthrough and every
+protocol endpoint. See [docs/protocol.md](docs/protocol.md) for the protocol
+specification and the machine-readable [`pkg/protocol/schema/mutandae.v1.json`](pkg/protocol/schema/mutandae.v1.json)
+JSON Schema. See [Implementation Choices](docs/implementation.md) for the
+architecture, tests, container image, GHCR publishing, and future K3s path.
 
 The repository is currently private. The published runtime image is intended to be public in GHCR so the native K3s cluster can pull it without a registry credential. Native DNS, TLS, routing, and Flux deployment configuration lives in the private `belacca-gitops` repository.
 
@@ -115,9 +126,11 @@ The repository is currently private. The published runtime image is intended to 
 
 ## Planned next implementation steps
 
-1. Define the public lifecycle/rotation protocol.
-2. Define the canonical domain model and state transitions.
-3. Build a minimal runnable control-plane shell with a local/simulated provider adapter.
-4. Build the open-source frontend around lifecycle and governance workflows.
+1. ~~Define the public lifecycle/rotation protocol.~~ → **done**: `pkg/protocol` v1.
+2. ~~Define the canonical domain model and state transitions.~~ → **done** in `pkg/protocol` + `internal/lifecycle`.
+3. ~~Build a minimal runnable control-plane shell with a local/simulated provider adapter.~~ → **done**: Azure-first demo.
+4. ~~Build the open-source frontend around lifecycle and governance workflows.~~ → **done** (HTMX dashboard + protocol API).
 5. Add the private Azure renewal boundary without publishing provider-specific production logic.
 6. Validate the complete Azure-first vertical slice against the MVP success criteria.
+
+See [MVP Objectives](docs/mvp-objectives.md) for the milestones and success criteria.

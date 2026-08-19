@@ -1,0 +1,752 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "μTandae Protocol v1",
+  "description": "JSON Schema for μTandae Protocol v1 wire objects.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ListResponse"
+    },
+    {
+      "$ref": "#/$defs/InspectResponse"
+    },
+    {
+      "$ref": "#/$defs/RegisterRequest"
+    },
+    {
+      "$ref": "#/$defs/RegisterResponse"
+    },
+    {
+      "$ref": "#/$defs/RotateRequest"
+    },
+    {
+      "$ref": "#/$defs/RotateResponse"
+    },
+    {
+      "$ref": "#/$defs/RetireRequest"
+    },
+    {
+      "$ref": "#/$defs/RetireResponse"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/DiscoveryIndex"
+    }
+  ],
+  "$defs": {
+    "ProviderBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "object_id": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_id"
+      ]
+    },
+    "Ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "criticality": {
+          "type": "string"
+        },
+        "contacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "team",
+        "service",
+        "purpose"
+      ]
+    },
+    "LifecyclePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "renewal_period": {
+          "type": "string",
+          "pattern": "^(?:P(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:D|W))+(?:T(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))*)?|PT(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))+)$"
+        },
+        "grace_period": {
+          "$ref": "#/$defs/ISO8601Duration"
+        },
+        "max_age": {
+          "$ref": "#/$defs/ISO8601Duration"
+        },
+        "approval_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "renewal_period",
+        "approval_required"
+      ]
+    },
+    "CredentialReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "location"
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "MachineIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderBinding"
+        },
+        "ownership": {
+          "$ref": "#/$defs/Ownership"
+        },
+        "policy": {
+          "$ref": "#/$defs/LifecyclePolicy"
+        },
+        "credential": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "health": {
+          "$ref": "#/$defs/Health"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_rotated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "metadata": {
+          "$ref": "#/$defs/Metadata"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "provider",
+        "ownership",
+        "state",
+        "health"
+      ]
+    },
+    "LifecycleEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "details": {
+          "$ref": "#/$defs/Metadata"
+        }
+      },
+      "required": [
+        "id",
+        "identity_id",
+        "type",
+        "summary",
+        "actor",
+        "outcome",
+        "at"
+      ]
+    },
+    "RotationRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/RotationStatus"
+        },
+        "requested_by": {
+          "type": "string"
+        },
+        "requested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "evidence": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "identity_id",
+        "status"
+      ]
+    },
+    "State": {
+      "type": "string",
+      "enum": [
+        "registered",
+        "active",
+        "renewing",
+        "retired"
+      ]
+    },
+    "Health": {
+      "type": "string",
+      "enum": [
+        "healthy",
+        "attention"
+      ]
+    },
+    "Urgency": {
+      "type": "string",
+      "enum": [
+        "healthy",
+        "expiring",
+        "overdue",
+        "retired"
+      ]
+    },
+    "RotationStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "rolled_back"
+      ]
+    },
+    "Outcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "in_progress",
+        "attention",
+        "failure",
+        "cancelled"
+      ]
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "conformance_failure",
+        "not_found",
+        "invalid_transition",
+        "already_retired",
+        "rotation_in_progress",
+        "provider_failure",
+        "unsupported_version",
+        "conflict",
+        "internal",
+        "unimplemented"
+      ]
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "identity.discovered",
+        "identity.registered",
+        "identity.imported",
+        "ownership.assigned",
+        "ownership.changed",
+        "policy.applied",
+        "renewal.alerted",
+        "expiry.imminent",
+        "expiry.overdue",
+        "rotation.requested",
+        "rotation.started",
+        "rotation.completed",
+        "rotation.failed",
+        "rotation.rolled_back",
+        "identity.retired",
+        "identity.revoked",
+        "identity.resurrected"
+      ]
+    },
+    "ISO8601Duration": {
+      "type": "string",
+      "pattern": "^(?:P(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:D|W))+(?:T(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))*)?|PT(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))+)$"
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "$ref": "#/$defs/Metadata"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "ListRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "after": {
+          "type": "string"
+        },
+        "namespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "InspectRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "DiscoveryResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rel": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "href": {
+          "type": "string"
+        },
+        "envelope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rel",
+        "method",
+        "href"
+      ]
+    },
+    "ListResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "identities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MachineIdentity"
+          }
+        },
+        "omitted": {
+          "type": "integer"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "total",
+        "identities"
+      ]
+    },
+    "InspectResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "identity": {
+          "$ref": "#/$defs/MachineIdentity"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "identity"
+      ]
+    },
+    "RegisterRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderBinding"
+        },
+        "ownership": {
+          "$ref": "#/$defs/Ownership"
+        },
+        "policy": {
+          "$ref": "#/$defs/LifecyclePolicy"
+        },
+        "credential": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "requested_by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "provider",
+        "ownership",
+        "policy"
+      ]
+    },
+    "RegisterResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "identity": {
+          "$ref": "#/$defs/MachineIdentity"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LifecycleEvent"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "identity"
+      ]
+    },
+    "RotateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "requested_by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/Metadata"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "RotateResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "identity": {
+          "$ref": "#/$defs/MachineIdentity"
+        },
+        "rotation": {
+          "$ref": "#/$defs/RotationRun"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LifecycleEvent"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "identity",
+        "rotation"
+      ]
+    },
+    "RetireRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "requested_by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "confirm"
+      ]
+    },
+    "RetireResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "identity": {
+          "$ref": "#/$defs/MachineIdentity"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LifecycleEvent"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "identity"
+      ]
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "error"
+      ]
+    },
+    "DiscoveryIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "v1"
+        },
+        "service": {
+          "type": "string"
+        },
+        "media_type": {
+          "const": "application/vnd.mutandae.v1+json"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiscoveryResource"
+          }
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "required": [
+        "api_version",
+        "service",
+        "media_type",
+        "resources"
+      ]
+    }
+  }
+}

@@ -6,7 +6,7 @@ The complete native-production delivery, troubleshooting history, attestation
 compatibility findings, and final verification are documented in
 [`docs/native-production-delivery.md`](native-production-delivery.md).
 
-This repository now contains the first runnable Mutandae vertical slice: an in-memory control-plane shell for inspecting machine identities, seeing ownership and expiry, triggering a simulated rotation, and inspecting correlated lifecycle events.
+This repository now contains a runnable Azure-first vertical slice: a versioned μTandae Protocol in `pkg/protocol`, a simulated Azure/Entra ID provider adapter in `internal/provider`, a control-plane store in `internal/lifecycle`, and the open-source frontend plus a protocol JSON API in `internal/web`.
 
 ## Product name and pronunciation
 
@@ -38,21 +38,56 @@ Templ is a good future option if the template surface grows or component-level t
 
 ### Domain and provider boundary
 
-`internal/lifecycle` owns provider-neutral concepts and valid state transitions. The web package consumes it through a small interface so a future persistent store, remote control-plane client, or provider adapter can be substituted without changing handlers:
+### Protocol (public contract)
+
+`pkg/protocol` is the versioned, provider-neutral **μTandae Protocol** consumed by
+cloud adapters, the control plane, and the frontend. It owns the object schemas
+(`MachineIdentity`, `ProviderBinding`, `Ownership`, `LifecyclePolicy`,
+`CredentialReference`, `LifecycleEvent`, `RotationRun`), the enumerations,
+message envelopes, ISO-8601 durations, the canonical state machine, and
+conformance validation. It never encodes provider mechanics or credentials. See
+[docs/protocol.md](protocol.md).
+
+### Provider adapter boundary
+
+`internal/lifecycle` defines a small consumer-side `Adapter` interface
+(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider`
+ships the public demo's **simulated azure-entra adapter**: it presents a tenant,
+application object ids, and credential evidence (key id, fingerprint, location),
+without any Azure SDK, credentials, or service endpoints. Production renewals
+implement the same boundary privately.
+
+### Control-plane store
+
+`internal/lifecycle.Store` is the protocol-native control plane. The demo
+*begins from the cloud*: at startup the store calls `adapter.Discover`, adopts
+each non-conformant-checked identity into governance, and audits
+`identity.discovered` + `identity.registered`. `Rotate` moves a governed
+identity through the canonical state machine (`active → renewing → active`),
+dispatches the adapter, applies the governed expiry from policy, records a
+correlated `RotationRun` plus evidence and `rotation.completed`; on adapter
+failure it returns to active with attention health and a `rotation.failed` run
+so a retry stays possible. `Retire` requires an explicit confirmation, asks the
+adapter to disable the registration, and audits `identity.retired`.
+
+The canonical transitions are:
 
 - `registered → active`;
 - `active → renewing → active`;
-- `active → retired`.
+- `active → retired`; `renewing → retired` (aborted renewal).
 
-The `cmd/mutandae` package is the composition root: it constructs the simulator, clock, logger, HTTP server, and bounded shutdown policy. Tests inject fakes and fixed time.
+The `cmd/mutandae` package is the composition root: it wires the simulated
+Azure adapter into the store, plus clock, logger, HTTP server, and a bounded
+shutdown policy. Tests inject fakes and fixed time.
 
-`Store.Rotate` is explicitly a synchronous simulator. It records `rotation.started`, updates the simulated expiry and health, records `rotation.completed`, and returns to `active`. A production adapter will implement the same boundary asynchronously, handle credential material without persisting it here, verify provider state, and add retries/recovery without changing the frontend contract.
-
-The seeded identities cover healthy, expiring-soon, and overdue states. This makes the evaluator experience useful without pretending that the simulator is an Azure tenant integration.
+The seeded identities cover healthy, expiring-soon, and overdue states so the
+evaluator experience is representative without pretending the simulator is a
+real Azure tenant.
 
 ## Run locally
 
-Requirements: Go 1.24 or newer. No Node, templ, database, or external service is needed.
+Requirements: Go 1.24 or newer. No Node, templ, database, or external service
+is needed.
 
 ```sh
 go test ./...
@@ -67,10 +102,19 @@ Useful endpoints:
 | `GET` | `/` | Full dashboard |
 | `GET` | `/partials/identities` | HTMX inventory fragment |
 | `GET` | `/identities/{id}/events` | HTMX audit-trail fragment |
-| `POST` | `/identities/{id}/rotate` | Simulated rotation and refreshed inventory |
-| `GET` | `/api/identities` | Small JSON inventory contract |
+| `POST` | `/identities/{id}/rotate` | Rotation + refreshed inventory |
+| `POST` | `/identities/{id}/retire` | Retire (explicit confirm) + refreshed inventory |
+| `GET` | `/api/v1/` | Protocol discovery index |
+| `GET` | `/api/v1/identities` | Protocol list envelope |
+| `GET` | `/api/v1/identities/{id}` | Protocol inspect envelope |
+| `POST` | `/api/v1/identities` | Protocol register envelope |
+| `POST` | `/api/v1/identities/{id}/rotations` | Protocol rotate envelope |
+| `POST` | `/api/v1/identities/{id}/retire` | Protocol retire envelope (requires `{"confirm":true}`) |
 | `GET` | `/livez` | Liveness probe |
 | `GET` | `/readyz` | Readiness probe |
+
+All `/api/v1` responses use the versioned content type
+`application/vnd.mutandae.v1+json` and conform to the protocol.
 
 ## Container
 
