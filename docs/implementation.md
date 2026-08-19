@@ -75,9 +75,9 @@ docker build -t mutandae:demo .
 docker run --rm -p 8080:8080 mutandae:demo
 ```
 
-The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline uses a read-only root filesystem. The private repository's GitHub Actions workflow builds and publishes `ghcr.io/macel94/mutandae` on trusted pushes to `main`. It also publishes GitHub keyless provenance, a CycloneDX SBOM, and a native-production vulnerability decision so the cluster's Kyverno admission policies can verify the image.
+The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline uses a read-only root filesystem. The private repository's GitHub Actions workflow builds and publishes `ghcr.io/macel94/mutandae` on trusted pushes to `main`. It also publishes keyless Sigstore/Cosign provenance, a CycloneDX SBOM, and a native-production vulnerability decision so the cluster's Kyverno admission policies can verify the image. This works while the source repository remains private because the attestations are stored with the public GHCR image rather than in GitHub's private-repository attestation storage.
 
-The image receives an immutable source-commit tag and `latest`; the generated deployment commit records the exact tag and digest in `deploy/k3s/kustomization.yaml`. Pull requests run tests and a non-publishing container build. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write`, `id-token: write`, and `attestations: write` permissions; no long-lived registry secret is required. The runtime image is intended to be public in GHCR while the source repository remains private. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
+The image receives an immutable source-commit tag and `latest`; the generated deployment commit records the exact tag and digest in `deploy/k3s/kustomization.yaml`. Pull requests run tests and a non-publishing container build. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write` and `id-token: write` permissions; no long-lived registry or signing secret is required. The runtime image is intended to be public in GHCR while the source repository remains private. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
 
 ## K3s later
 
@@ -85,16 +85,15 @@ The image receives an immutable source-commit tag and `latest`; the generated de
 
 Before applying it to the cluster:
 
-1. Wait for the GitHub Actions publish job to push an image to GHCR, or build and publish `Dockerfile` manually.
-2. Replace the example image reference in the manifest with an immutable `sha-...` tag or digest from `ghcr.io/macel94/mutandae`.
-3. Add the cluster-specific Ingress and TLS configuration.
+1. Wait for the GitHub Actions publish job to push an image and generate the digest-pinning deployment commit.
+2. Use the generated `sha-...` tag and digest from `deploy/k3s/kustomization.yaml`.
+3. Let the private `belacca-gitops` repository own the cluster-specific Ingress, TLS, Flux source, and admission policy configuration.
 4. Replace the in-memory store with persistence before treating the deployment as durable.
 5. Add the private provider adapter and secret-delivery boundary separately; do not put credentials in this demo manifest.
 
 ```sh
-kubectl apply -f deploy/k3s/deployment.yaml
-kubectl rollout status deployment/mutandae
-kubectl port-forward service/mutandae 8080:80
+kubectl kustomize deploy/k3s
+# Native production is applied by Flux from the private belacca-gitops repository.
 ```
 
 The manifest is a deployment starting point, not a production security or availability claim.

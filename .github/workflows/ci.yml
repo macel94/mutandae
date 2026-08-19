@@ -13,6 +13,7 @@ on:
       - '.dockerignore'
       - 'go.mod'
       - 'docs/**'
+      - 'scripts/**'
   pull_request:
     branches:
       - main
@@ -58,6 +59,9 @@ jobs:
       - name: Build container
         run: docker build --tag mutandae:test .
 
+      - name: Test vulnerability decision contract
+        run: node --test scripts/create-vulnerability-decision.test.mjs
+
   publish:
     name: Publish immutable image
     if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'deploy: publish image') }}"
@@ -68,8 +72,8 @@ jobs:
       contents: write
       packages: write
       id-token: write
-      attestations: write
-      artifact-metadata: write
+    env:
+      COSIGN_EXPERIMENTAL: '1'
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,7 +98,7 @@ jobs:
             ghcr.io/macel94/mutandae:sha-${{ github.sha }}
             ghcr.io/macel94/mutandae:latest
           provenance: false
-          sbom: true
+          sbom: false
           cache-from: type=gha,scope=mutandae-image
           cache-to: type=gha,mode=max,scope=mutandae-image
 
@@ -145,29 +149,60 @@ jobs:
           output-file: mutandae.sbom.cdx.json
           upload-artifact: false
 
-      - name: Attest image provenance with GitHub
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/macel94/mutandae
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Attest image SBOM with GitHub
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/macel94/mutandae
-          subject-digest: ${{ steps.image.outputs.digest }}
-          sbom-path: mutandae.sbom.cdx.json
-          push-to-registry: true
+      - name: Create SLSA provenance predicate
+        env:
+          IMAGE_NAME: ghcr.io/macel94/mutandae
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          digest="${IMAGE_DIGEST#sha256:}"
+          cat > mutandae.provenance.json <<EOF
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": "${IMAGE_NAME}", "digest": {"sha256": "${digest}"}}],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+                "externalParameters": {
+                  "workflow": {
+                    "ref": "${GITHUB_REF}",
+                    "repository": "https://github.com/${GITHUB_REPOSITORY}",
+                    "path": ".github/workflows/ci.yml"
+                  }
+                },
+                "resolvedDependencies": [{
+                  "uri": "git+https://github.com/${GITHUB_REPOSITORY}@${GITHUB_SHA}",
+                  "digest": {"sha1": "${GITHUB_SHA}"}
+                }]
+              },
+              "runDetails": {
+                "builder": {"id": "https://github.com/actions/runner"},
+                "metadata": {
+                  "invocationId": "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+                }
+              }
+            }
+          }
+          EOF
 
-      - name: Attest native production vulnerability decision
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/macel94/mutandae
-          subject-digest: ${{ steps.image.outputs.digest }}
-          predicate-type: https://belacca.com/attestations/vulnerability/v1
-          predicate-path: mutandae.vulnerability-decision.json
-          push-to-registry: true
+      - name: Attest image provenance with Cosign
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+        run: cosign attest --yes --predicate mutandae.provenance.json --type https://slsa.dev/provenance/v1 "$IMAGE"
+
+      - name: Attest image SBOM with Cosign
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+        run: cosign attest --yes --predicate mutandae.sbom.cdx.json --type cyclonedx "$IMAGE"
+
+      - name: Attest native production vulnerability decision with Cosign
+        env:
+          IMAGE: ${{ steps.image.outputs.reference }}
+        run: cosign attest --yes --predicate mutandae.vulnerability-decision.json --type https://belacca.com/attestations/vulnerability/v1 "$IMAGE"
 
       - name: Record deployed immutable image
         shell: bash
