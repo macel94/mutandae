@@ -101,6 +101,8 @@ go run ./cmd/mutandae
 
 See [Implementation Choices](docs/implementation.md) for the architecture, endpoints, tests, container image, GHCR publishing, and future K3s deployment path.
 
+The repository is currently private. The published runtime image is intended to be public in GHCR so the native K3s cluster can pull it without a registry credential. Native DNS, TLS, routing, and Flux deployment configuration lives in the private `belacca-gitops` repository.
+
 ## Working principles
 
 - Prefer lifecycle clarity over raw provider-state replication.

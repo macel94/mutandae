@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mutandae
+  labels:
+    app.kubernetes.io/part-of: mutandae
+    belacca.com/project: mutandae
+    belacca.com/stage: native-production

@@ -1,33 +1,37 @@
-name: CI and container image
+name: Test and publish Mutandae
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
-    tags:
-      - 'v*'
+    paths:
+      - '.github/workflows/ci.yml'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'deploy/**'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'go.mod'
+      - 'docs/**'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+
+concurrency:
+  group: mutandae-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  GO_VERSION_FILE: go.mod
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
-  validate:
-    name: Validate Go application
+  test:
+    name: Validate Mutandae
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,7 +39,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: ${{ env.GO_VERSION_FILE }}
+          go-version-file: go.mod
           cache: true
 
       - name: Check formatting
@@ -51,70 +55,136 @@ jobs:
       - name: Build application
         run: go build -trimpath -ldflags='-s -w' ./cmd/mutandae
 
-  build-image:
-    name: Build container image (pull request)
-    needs: validate
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Build image without publishing
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          tags: mutandae:pr-${{ github.event.pull_request.number }}
+      - name: Build container
+        run: docker build --tag mutandae:test .
 
   publish:
-    name: Build and publish GHCR image
-    needs: validate
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    name: Publish immutable image
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'deploy: publish image') }}"
+    needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
-      contents: read
+      contents: write
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Build and push image
+      - name: Build and publish
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/macel94/mutandae:sha-${{ github.sha }}
+            ghcr.io/macel94/mutandae:latest
+          provenance: false
+          sbom: true
           cache-from: type=gha,scope=mutandae-image
           cache-to: type=gha,mode=max,scope=mutandae-image
+
+      - name: Set immutable image identity
+        id: image
+        env:
+          IMAGE_NAME: ghcr.io/macel94/mutandae
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "reference=${IMAGE_NAME}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the pushed image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.reference }}
+          format: json
+          output: mutandae.trivy.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          scanners: vuln
+          exit-code: '0'
+
+      - name: Create vulnerability decision
+        env:
+          IMAGE_NAME: ghcr.io/macel94/mutandae
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          node scripts/create-vulnerability-decision.mjs \
+            --input mutandae.trivy.json \
+            --output mutandae.vulnerability-decision.json \
+            --image "$IMAGE_NAME" \
+            --digest "$IMAGE_DIGEST"
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const decision = JSON.parse(await readFile("mutandae.vulnerability-decision.json", "utf8"));
+            if (["HIGH", "CRITICAL"].includes(decision.maxSeverity) || decision.knownUnfixed) {
+              throw new Error(`native-production-v1 promotion blocked: maxUnfixedSeverity=${decision.maxSeverity}, maxObservedSeverity=${decision.maxObservedSeverity}, knownUnfixed=${decision.knownUnfixed}`);
+            }
+          '
+
+      - name: Generate registry SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.image.outputs.reference }}
+          format: cyclonedx-json
+          output-file: mutandae.sbom.cdx.json
+          upload-artifact: false
+
+      - name: Attest image provenance with GitHub
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/macel94/mutandae
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest image SBOM with GitHub
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/macel94/mutandae
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: mutandae.sbom.cdx.json
+          push-to-registry: true
+
+      - name: Attest native production vulnerability decision
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/macel94/mutandae
+          subject-digest: ${{ steps.image.outputs.digest }}
+          predicate-type: https://belacca.com/attestations/vulnerability/v1
+          predicate-path: mutandae.vulnerability-decision.json
+          push-to-registry: true
+
+      - name: Record deployed immutable image
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA}"
+          sed -i -E "s#(    newTag: ).*#\1${tag}#" deploy/k3s/kustomization.yaml
+          if grep -q '^    digest:' deploy/k3s/kustomization.yaml; then
+            sed -i -E "s#(    digest: ).*#\1${IMAGE_DIGEST}#" deploy/k3s/kustomization.yaml
+          else
+            sed -i "/^    newTag:/a\    digest: ${IMAGE_DIGEST}" deploy/k3s/kustomization.yaml
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/k3s/kustomization.yaml
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "deploy: publish image ${tag}"
+          git push

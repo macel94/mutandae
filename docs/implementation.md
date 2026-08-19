@@ -75,13 +75,13 @@ docker build -t mutandae:demo .
 docker run --rm -p 8080:8080 mutandae:demo
 ```
 
-The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline can use a read-only root filesystem. The repository's GitHub Actions workflow builds the image with Buildx and publishes it to `ghcr.io/macel94/mutandae` on pushes to `main`, `v*` tags, and manual workflow dispatches. Pull requests run the Go validation job but do not receive registry credentials or push images.
+The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline uses a read-only root filesystem. The private repository's GitHub Actions workflow builds and publishes `ghcr.io/macel94/mutandae` on trusted pushes to `main`. It also publishes GitHub keyless provenance, a CycloneDX SBOM, and a native-production vulnerability decision so the cluster's Kyverno admission policies can verify the image.
 
-The image receives branch or release tags, an immutable commit-SHA tag, and `latest` for the default branch. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write` permission; no long-lived registry secret is required. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
+The image receives an immutable source-commit tag and `latest`; the generated deployment commit records the exact tag and digest in `deploy/k3s/kustomization.yaml`. Pull requests run tests and a non-publishing container build. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write`, `id-token: write`, and `attestations: write` permissions; no long-lived registry secret is required. The runtime image is intended to be public in GHCR while the source repository remains private. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
 
 ## K3s later
 
-`deploy/k3s/deployment.yaml` is a deliberately small Deployment and ClusterIP Service baseline. It includes liveness/readiness probes and a restrictive container security context, but it does not assume an ingress controller, registry, domain, TLS issuer, persistence layer, or GitOps system.
+`deploy/k3s/` is a deliberately small Deployment, Service, Namespace, and Kustomize application baseline. It includes startup/readiness/liveness probes and a restrictive container security context, but it does not assume an ingress controller, registry credentials, domain, TLS issuer, persistence layer, or GitOps system. Native production adds those cluster-level resources in the private `belacca-gitops` repository.
 
 Before applying it to the cluster:
 
