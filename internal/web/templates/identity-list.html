@@ -24,6 +24,7 @@
         <td class="actions-cell">
           <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#activity-panel" hx-swap="innerHTML">↗</button>
           {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
+          {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance.">Retire</button>{{ end }}
         </td>
       </tr>
       {{ else }}

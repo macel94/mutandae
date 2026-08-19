@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mutandae/mutandae/internal/lifecycle"
+	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
 //go:embed templates/*.html
@@ -19,14 +21,19 @@ var templateFS embed.FS
 //go:embed static/*
 var staticFS embed.FS
 
-// LifecycleService is the web layer's small consumer-defined boundary. The
-// production implementation is lifecycle.Store; tests and future adapters can
-// provide a narrower fake or a remote implementation without changing handlers.
+// LifecycleService is the web layer's small consumer-defined boundary, mirroring
+// the control-plane operations. The production implementation is lifecycle.Store;
+// tests and future adapters can substitute a fake without changing handlers.
+// Everything exchanged across the boundary is a μTandae Protocol type, so both
+// the server-rendered frontend and the JSON protocol API speak the same contract.
 type LifecycleService interface {
-	List() []lifecycle.Identity
-	Get(id string) (lifecycle.Identity, bool)
-	Events(id string) ([]lifecycle.Event, bool)
-	Rotate(id string, now time.Time) (lifecycle.Identity, error)
+	List() []protocol.MachineIdentity
+	Get(id string) (protocol.MachineIdentity, bool)
+	Events(id string) ([]protocol.LifecycleEvent, bool)
+	Runs(id string) ([]protocol.RotationRun, bool)
+	Register(ctx context.Context, req protocol.RegisterRequest, now time.Time) (protocol.RegisterResponse, error)
+	Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error)
+	Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error)
 }
 
 // Clock makes time-dependent rendering and mutations deterministic in tests.
@@ -75,14 +82,15 @@ func newServer(deps Dependencies) (*Server, error) {
 	templates, err := template.New("mutandae").Funcs(template.FuncMap{
 		"formatDate": func(value time.Time) string { return value.Format("Jan 02, 2006") },
 		"formatTime": func(value time.Time) string { return value.Format("Jan 02, 2006 · 15:04 MST") },
-		"eventClass": func(outcome string) string {
-			if outcome == "success" {
+		"eventClass": func(outcome protocol.Outcome) string {
+			switch outcome {
+			case protocol.OutcomeSuccess:
 				return "event-success"
-			}
-			if outcome == "attention" {
+			case protocol.OutcomeAttention, protocol.OutcomeFailure:
 				return "event-attention"
+			default:
+				return "event-progress"
 			}
-			return "event-progress"
 		},
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
@@ -105,11 +113,20 @@ func newServer(deps Dependencies) (*Server, error) {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+	// Server-rendered frontend (HTMX + Alpine).
 	mux.HandleFunc("GET /{$}", s.dashboard)
 	mux.HandleFunc("GET /partials/identities", s.identityList)
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
-	mux.HandleFunc("GET /api/identities", s.apiIdentities)
+	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
+	// Protocol JSON API (versioned).
+	mux.HandleFunc("GET /api/v1/", s.apiRoot)
+	mux.HandleFunc("GET /api/v1/identities", s.apiList)
+	mux.HandleFunc("POST /api/v1/identities", s.apiRegister)
+	mux.HandleFunc("GET /api/v1/identities/{id}", s.apiInspect)
+	mux.HandleFunc("POST /api/v1/identities/{id}/rotations", s.apiRotate)
+	mux.HandleFunc("POST /api/v1/identities/{id}/retire", s.apiRetire)
+	// Health probes.
 	mux.HandleFunc("GET /livez", s.health)
 	mux.HandleFunc("GET /readyz", s.health)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
@@ -139,40 +156,144 @@ func (s *Server) identityEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
-	_, err := s.lifecycle.Rotate(r.PathValue("id"), s.now())
+	req := protocol.RotateRequest{
+		ID:          r.PathValue("id"),
+		RequestedBy: operatorOrDefault(r),
+		Reason:      "operator initiated from dashboard",
+	}
+	_, err := s.lifecycle.Rotate(r.Context(), req, s.now())
 	if err != nil {
-		status := http.StatusConflict
-		if errors.Is(err, lifecycle.ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		http.Error(w, err.Error(), status)
+		s.writeError(w, err, http.StatusConflict)
 		return
 	}
 	s.identityList(w, r)
 }
 
-func (s *Server) apiIdentities(w http.ResponseWriter, r *http.Request) {
-	now := s.now()
+func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
+	req := protocol.RetireRequest{
+		ID:          r.PathValue("id"),
+		RequestedBy: operatorOrDefault(r),
+		Reason:      "operator initiated from dashboard",
+		Confirm:     true,
+	}
+	_, err := s.lifecycle.Retire(r.Context(), req, s.now())
+	if err != nil {
+		s.writeError(w, err, http.StatusConflict)
+		return
+	}
+	s.identityList(w, r)
+}
+
+// --- Protocol JSON API ---
+
+func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, protocol.DiscoveryIndex{
+		APIVersion: protocol.Version,
+		Service:    "mutandae-control-plane",
+		MediaType:  protocol.MediaType,
+		Resources: []protocol.DiscoveryResource{
+			{Rel: "identities", Method: http.MethodGet, HREF: "/api/v1/identities", Envelope: "list"},
+			{Rel: "identity", Method: http.MethodGet, HREF: "/api/v1/identities/{id}", Envelope: "inspect"},
+			{Rel: "register", Method: http.MethodPost, HREF: "/api/v1/identities", Envelope: "register"},
+			{Rel: "rotate", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/rotations", Envelope: "rotate"},
+			{Rel: "retire", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/retire", Envelope: "retire"},
+		},
+	})
+}
+
+func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 	identities := s.lifecycle.List()
-	response := make([]apiIdentity, 0, len(identities))
-	for _, identity := range identities {
-		view := toIdentityView(identity, now)
-		response = append(response, apiIdentity{
-			ID: view.ID, Name: view.Name, Provider: view.Provider, Environment: view.Environment,
-			Owner: view.Owner, Workload: view.Workload, Criticality: view.Criticality, State: identity.State,
-			RenewalHealth: identity.RenewalHealth, Urgency: identity.Urgency(now), ExpiresAt: identity.ExpiresAt,
-			LastRotatedAt: identity.LastRotatedAt,
-		})
+	s.writeJSON(w, http.StatusOK, protocol.ListResponse{
+		APIVersion: protocol.Version,
+		Total:      len(identities),
+		Identities: identities,
+	})
+}
+
+func (s *Server) apiInspect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	identity, ok := s.lifecycle.Get(id)
+	if !ok {
+		s.writeJSON(w, http.StatusNotFound, protocol.Failure(protocol.NewError(protocol.ErrCodeNotFound, "identity not found")))
+		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.logger.Printf("encode identities: %v", err)
+	s.writeJSON(w, http.StatusOK, protocol.InspectResponse{APIVersion: protocol.Version, Identity: identity})
+}
+
+func (s *Server) apiRegister(w http.ResponseWriter, r *http.Request) {
+	var req protocol.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+		return
 	}
+	resp, err := s.lifecycle.Register(r.Context(), req, s.now())
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) apiRotate(w http.ResponseWriter, r *http.Request) {
+	req := protocol.RotateRequest{
+		ID:          r.PathValue("id"),
+		RequestedBy: operatorOrDefault(r),
+		Reason:      "protocol api",
+	}
+	resp, err := s.lifecycle.Rotate(r.Context(), req, s.now())
+	if err != nil {
+		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) apiRetire(w http.ResponseWriter, r *http.Request) {
+	var body protocol.RetireRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+			return
+		}
+	}
+	body.ID = r.PathValue("id")
+	body.RequestedBy = operatorOrDefault(r)
+	resp, err := s.lifecycle.Retire(r.Context(), body, s.now())
+	if err != nil {
+		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", protocol.ContentType)
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		s.logger.Printf("encode protocol payload: %v", err)
+	}
+}
+
+// writeError writes a browser-readable error for the HTML actions, mapping
+// lifecycle errors onto appropriate HTTP status codes.
+func (s *Server) writeError(w http.ResponseWriter, err error, defaultStatus int) {
+	status := defaultStatus
+	if errors.Is(err, lifecycle.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+	http.Error(w, err.Error(), status)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+func operatorOrDefault(r *http.Request) string {
+	if operator := r.Header.Get("X-Mutandae-Operator"); operator != "" {
+		return operator
+	}
+	return "demo-operator"
 }
 
 func (s *Server) dashboardView() dashboardView {
@@ -186,15 +307,22 @@ func (s *Server) dashboardView() dashboardView {
 		item := toIdentityView(identity, now)
 		view.Identities = append(view.Identities, item)
 		view.Total++
+		if view.TenantID == "" && identity.Provider.TenantID != "" {
+			view.TenantID = identity.Provider.TenantID
+		}
+		if view.ProviderLabel == "" && identity.Provider.Provider != "" {
+			view.Provider = identity.Provider.Provider
+			view.ProviderLabel = providerLabel(identity.Provider.Provider)
+		}
 		switch item.Urgency {
-		case string(lifecycle.UrgencyHealthy):
-			if item.RenewalHealth == string(lifecycle.RenewalHealthy) {
+		case string(protocol.UrgencyHealthy):
+			if item.RenewalHealth == string(protocol.HealthHealthy) {
 				view.Healthy++
 			}
-		case string(lifecycle.UrgencyExpiring):
+		case string(protocol.UrgencyExpiring):
 			view.Expiring++
 		}
-		if item.RenewalHealth != string(lifecycle.RenewalHealthy) || item.Urgency == string(lifecycle.UrgencyOverdue) {
+		if item.RenewalHealth != string(protocol.HealthHealthy) || item.Urgency == string(protocol.UrgencyOverdue) {
 			view.Attention++
 		}
 	}
@@ -202,18 +330,22 @@ func (s *Server) dashboardView() dashboardView {
 }
 
 type dashboardView struct {
-	Identities []identityView
-	Total      int
-	Healthy    int
-	Expiring   int
-	Attention  int
-	UpdatedAt  string
+	Identities    []identityView
+	Total         int
+	Healthy       int
+	Expiring      int
+	Attention     int
+	UpdatedAt     string
+	Provider      string
+	ProviderLabel string
+	TenantID      string
 }
 
 type identityView struct {
 	ID               string
 	Name             string
 	Provider         string
+	ProviderKind     string
 	Environment      string
 	Owner            string
 	Workload         string
@@ -232,76 +364,91 @@ type identityView struct {
 
 type eventsView struct {
 	Identity identityView
-	Events   []lifecycle.Event
+	Events   []protocol.LifecycleEvent
 }
 
-type apiIdentity struct {
-	ID            string                  `json:"id"`
-	Name          string                  `json:"name"`
-	Provider      string                  `json:"provider"`
-	Environment   string                  `json:"environment"`
-	Owner         string                  `json:"owner"`
-	Workload      string                  `json:"workload"`
-	Criticality   string                  `json:"criticality"`
-	State         lifecycle.State         `json:"state"`
-	RenewalHealth lifecycle.RenewalHealth `json:"renewal_health"`
-	Urgency       lifecycle.Urgency       `json:"urgency"`
-	ExpiresAt     time.Time               `json:"expires_at"`
-	LastRotatedAt time.Time               `json:"last_rotated_at"`
+func urgency(identity protocol.MachineIdentity, now time.Time) protocol.Urgency {
+	if identity.State == protocol.StateRetired {
+		return protocol.UrgencyRetired
+	}
+	if !identity.ExpiresAt.After(now) {
+		return protocol.UrgencyOverdue
+	}
+	if identity.ExpiresAt.Before(now.Add(30 * 24 * time.Hour)) {
+		return protocol.UrgencyExpiring
+	}
+	return protocol.UrgencyHealthy
 }
 
-func toIdentityView(identity lifecycle.Identity, now time.Time) identityView {
-	urgency := identity.Urgency(now)
+func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityView {
+	urg := urgency(identity, now)
 	days := int(identity.ExpiresAt.Sub(now).Hours() / 24)
 	if identity.ExpiresAt.After(now) && identity.ExpiresAt.Sub(now)%(24*time.Hour) != 0 {
 		days++
 	}
+	base := identityView{
+		ID: identity.ID, Name: identity.Name,
+		Provider: providerLabel(identity.Provider.Provider), ProviderKind: identity.Provider.Provider,
+		Environment: identity.Environment, Owner: identity.Ownership.Team, Workload: identity.Ownership.Service,
+		Criticality: identity.Ownership.Criticality, State: string(identity.State),
+		StateLabel: stateLabel(identity.State), RenewalHealth: string(identity.Health), Urgency: string(urg),
+		UrgencyLabel: urgencyLabel(urg), UrgencyClass: string(urg),
+		ExpiryLabel:      identity.ExpiresAt.Format("Jan 02, 2006"),
+		LastRotatedLabel: lastRotatedLabel(identity.LastRotatedAt),
+	}
 	if days < 0 {
-		daysAbs := -days
-		return identityView{
-			ID: identity.ID, Name: identity.Name, Provider: identity.Provider, Environment: identity.Environment,
-			Owner: identity.Owner, Workload: identity.Workload, Criticality: identity.Criticality, State: string(identity.State),
-			StateLabel: stateLabel(identity.State), RenewalHealth: string(identity.RenewalHealth), Urgency: string(urgency),
-			UrgencyLabel: urgencyLabel(urgency), UrgencyClass: string(urgency), ExpiryLabel: identity.ExpiresAt.Format("Jan 02, 2006"),
-			ExpiryRelative: "Overdue by " + formatDays(daysAbs), LastRotatedLabel: lastRotatedLabel(identity.LastRotatedAt),
-			SearchText: searchText(identity),
+		base.ExpiryRelative = "Overdue by " + formatDays(-days)
+	} else {
+		relative := "Due today"
+		if days == 1 {
+			relative = "Due tomorrow"
+		} else if days > 1 {
+			relative = "Due in " + formatDays(days)
 		}
+		base.ExpiryRelative = relative
 	}
-	relative := "Due today"
-	if days == 1 {
-		relative = "Due tomorrow"
-	} else if days > 1 {
-		relative = "Due in " + formatDays(days)
-	}
-	return identityView{
-		ID: identity.ID, Name: identity.Name, Provider: identity.Provider, Environment: identity.Environment,
-		Owner: identity.Owner, Workload: identity.Workload, Criticality: identity.Criticality, State: string(identity.State),
-		StateLabel: stateLabel(identity.State), RenewalHealth: string(identity.RenewalHealth), Urgency: string(urgency),
-		UrgencyLabel: urgencyLabel(urgency), UrgencyClass: string(urgency), ExpiryLabel: identity.ExpiresAt.Format("Jan 02, 2006"),
-		ExpiryRelative: relative, LastRotatedLabel: lastRotatedLabel(identity.LastRotatedAt), SearchText: searchText(identity),
+	base.SearchText = strings.ToLower(strings.Join([]string{
+		identity.Name, base.Provider, identity.Environment, base.Owner, base.Workload, base.Criticality,
+	}, " "))
+	return base
+}
+
+func providerLabel(kind string) string {
+	switch kind {
+	case "azure-entra":
+		return "Azure / Entra ID"
+	case "aws-iam":
+		return "AWS IAM"
+	case "gcp-iam":
+		return "GCP IAM"
+	default:
+		if kind == "" {
+			return "Unknown"
+		}
+		return kind
 	}
 }
 
-func stateLabel(state lifecycle.State) string {
+func stateLabel(state protocol.State) string {
 	switch state {
-	case lifecycle.StateRegistered:
+	case protocol.StateRegistered:
 		return "Registered"
-	case lifecycle.StateRenewing:
+	case protocol.StateRenewing:
 		return "Renewing"
-	case lifecycle.StateRetired:
+	case protocol.StateRetired:
 		return "Retired"
 	default:
 		return "Active"
 	}
 }
 
-func urgencyLabel(urgency lifecycle.Urgency) string {
+func urgencyLabel(urgency protocol.Urgency) string {
 	switch urgency {
-	case lifecycle.UrgencyExpiring:
+	case protocol.UrgencyExpiring:
 		return "Expiring soon"
-	case lifecycle.UrgencyOverdue:
+	case protocol.UrgencyOverdue:
 		return "Overdue"
-	case lifecycle.UrgencyRetired:
+	case protocol.UrgencyRetired:
 		return "Retired"
 	default:
 		return "Healthy"
@@ -313,13 +460,7 @@ func formatDays(days int) string {
 	if days == 1 {
 		unit = "day"
 	}
-	return strings.TrimSpace(strings.Join([]string{fmtInt(days), unit}, " "))
-}
-
-func fmtInt(value int) string {
-	// The demo only needs small day counts; keeping formatting local avoids a
-	// third-party dependency for a single integer.
-	return strconvItoa(value)
+	return strconvItoa(days) + " " + unit
 }
 
 func strconvItoa(value int) string {
@@ -349,12 +490,6 @@ func lastRotatedLabel(value time.Time) string {
 		return "Never"
 	}
 	return value.Format("Jan 02, 2006")
-}
-
-func searchText(identity lifecycle.Identity) string {
-	return strings.ToLower(strings.Join([]string{
-		identity.Name, identity.Provider, identity.Environment, identity.Owner, identity.Workload, identity.Criticality,
-	}, " "))
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

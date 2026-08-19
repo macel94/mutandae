@@ -44,12 +44,22 @@ type RegisterRequest struct {
 	Name        string              `json:"name"`
 	DisplayName string              `json:"display_name,omitempty"`
 	Namespace   string              `json:"namespace,omitempty"`
+	Environment string              `json:"environment,omitempty"`
 	Provider    ProviderBinding     `json:"provider"`
 	Ownership   Ownership           `json:"ownership"`
 	Policy      LifecyclePolicy     `json:"policy"`
 	Credential  CredentialReference `json:"credential,omitempty"`
 	ExpiresAt   time.Time           `json:"expires_at,omitempty"`
 	RequestedBy string              `json:"requested_by,omitempty"`
+}
+
+// RequestedByOrDefault returns the actor that requested registration, defaulting
+// to the control plane actor when none is supplied.
+func (r RegisterRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorControlPlane
 }
 
 // RegisterResponse returns the stored identity plus the audit events produced
@@ -78,6 +88,15 @@ type RotateResponse struct {
 	Error      *Error           `json:"error,omitempty"`
 }
 
+// RequestedByOrDefault returns the actor that requested the rotation, defaulting
+// to the operator actor when none is supplied.
+func (r RotateRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorOperator
+}
+
 // RetireRequest decommissions a machine identity through an explicit lifecycle
 // transition.
 type RetireRequest struct {
@@ -93,6 +112,15 @@ type RetireResponse struct {
 	Identity   MachineIdentity  `json:"identity"`
 	Events     []LifecycleEvent `json:"events,omitempty"`
 	Error      *Error           `json:"error,omitempty"`
+}
+
+// RequestedByOrDefault returns the actor that requested retirement, defaulting
+// to the operator actor when none is supplied.
+func (r RetireRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorOperator
 }
 
 // ErrorResponse is the canonical failure document.

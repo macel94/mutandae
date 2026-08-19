@@ -1,152 +1,102 @@
-// Package lifecycle contains the provider-neutral domain model used by the demo.
 package lifecycle
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
-type State string
-
-const (
-	StateRegistered State = "registered"
-	StateActive     State = "active"
-	StateRenewing   State = "renewing"
-	StateRetired    State = "retired"
-)
-
-type RenewalHealth string
-
-const (
-	RenewalHealthy   RenewalHealth = "healthy"
-	RenewalAttention RenewalHealth = "attention"
-)
-
-type Urgency string
-
-const (
-	UrgencyHealthy  Urgency = "healthy"
-	UrgencyExpiring Urgency = "expiring"
-	UrgencyOverdue  Urgency = "overdue"
-	UrgencyRetired  Urgency = "retired"
-)
-
-var (
-	ErrNotFound           = errors.New("identity not found")
-	ErrInvalidTransition  = errors.New("invalid lifecycle transition")
-	ErrAlreadyRetired     = errors.New("identity is retired")
-	ErrRotationInProgress = errors.New("identity already has a rotation in progress")
-)
-
-type Identity struct {
-	ID            string
-	Name          string
-	Provider      string
-	Environment   string
-	Owner         string
-	Workload      string
-	Criticality   string
-	State         State
-	RenewalHealth RenewalHealth
-	ExpiresAt     time.Time
-	LastRotatedAt time.Time
-	RenewalPolicy string
-	RenewalPeriod time.Duration
-}
-
-func (i Identity) Urgency(now time.Time) Urgency {
-	if i.State == StateRetired {
-		return UrgencyRetired
-	}
-	if !i.ExpiresAt.After(now) {
-		return UrgencyOverdue
-	}
-	if i.ExpiresAt.Before(now.Add(30 * 24 * time.Hour)) {
-		return UrgencyExpiring
-	}
-	return UrgencyHealthy
-}
-
-type Event struct {
-	ID         string
-	IdentityID string
-	Type       string
-	Summary    string
-	Actor      string
-	Outcome    string
-	At         time.Time
-}
-
+// Store is an in-memory control-plane implementation of the μTandae Protocol
+// lifecycle. It stores protocol-native MachineIdentities plus their audit
+// events and rotation runs, and orchestrates lifecycle changes with a provider
+// Adapter. It is not durable or horizontally shared; it exists to make the
+// public demo runnable and testable without a database.
 type Store struct {
 	mu         sync.RWMutex
-	identities map[string]Identity
-	events     map[string][]Event
+	adapter    Adapter
+	identities map[string]protocol.MachineIdentity
+	events     map[string][]protocol.LifecycleEvent
+	runs       map[string][]protocol.RotationRun
 	nextEvent  int
+	nextRun    int
 }
 
-func NewDemoStore(now time.Time) *Store {
-	now = now.UTC()
-	store := &Store{
-		identities: make(map[string]Identity),
-		events:     make(map[string][]Event),
+// NewStore constructs a control-plane store bound to the given provider adapter
+// and fans out the adapter's discovered identities through the registration
+// flow, so the demo genuinely "starts from the cloud".
+func NewStore(ctx context.Context, now time.Time, adapter Adapter) (*Store, error) {
+	if adapter == nil {
+		return nil, ErrAdapterRequired
 	}
-
-	store.addIdentity(Identity{
-		ID: "payments-api", Name: "payments-api", Provider: "Azure / Entra ID", Environment: "production",
-		Owner: "Payments Platform", Workload: "Payment authorization", Criticality: "critical", State: StateActive,
-		RenewalHealth: RenewalAttention, ExpiresAt: now.Add(5 * 24 * time.Hour), LastRotatedAt: now.Add(-85 * 24 * time.Hour),
-		RenewalPolicy: "90-day application credential", RenewalPeriod: 90 * 24 * time.Hour,
-	}, now.Add(-85*24*time.Hour), "identity.registered", "Registered from the Azure simulator", "demo-seed", "success")
-	store.addEvent("payments-api", now.Add(-85*24*time.Hour), "rotation.completed", "Previous rotation verified against provider state", "rotation-simulator", "success")
-
-	store.addIdentity(Identity{
-		ID: "data-pipeline", Name: "data-pipeline", Provider: "Azure / Entra ID", Environment: "staging",
-		Owner: "Data Engineering", Workload: "Warehouse ingestion", Criticality: "high", State: StateActive,
-		RenewalHealth: RenewalHealthy, ExpiresAt: now.Add(18 * 24 * time.Hour), LastRotatedAt: now.Add(-72 * 24 * time.Hour),
-		RenewalPolicy: "90-day application credential", RenewalPeriod: 90 * 24 * time.Hour,
-	}, now.Add(-72*24*time.Hour), "identity.registered", "Registered from the Azure simulator", "demo-seed", "success")
-	store.addEvent("data-pipeline", now.Add(-72*24*time.Hour), "rotation.completed", "Previous rotation verified against provider state", "rotation-simulator", "success")
-
-	store.addIdentity(Identity{
-		ID: "inventory-sync", Name: "inventory-sync", Provider: "Azure / Entra ID", Environment: "production",
-		Owner: "Commerce Infrastructure", Workload: "Stock reconciliation", Criticality: "high", State: StateActive,
-		RenewalHealth: RenewalHealthy, ExpiresAt: now.Add(75 * 24 * time.Hour), LastRotatedAt: now.Add(-15 * 24 * time.Hour),
-		RenewalPolicy: "90-day application credential", RenewalPeriod: 90 * 24 * time.Hour,
-	}, now.Add(-15*24*time.Hour), "identity.registered", "Registered from the Azure simulator", "demo-seed", "success")
-	store.addEvent("inventory-sync", now.Add(-15*24*time.Hour), "rotation.completed", "Previous rotation verified against provider state", "rotation-simulator", "success")
-
-	store.addIdentity(Identity{
-		ID: "legacy-reporting", Name: "legacy-reporting", Provider: "Azure / Entra ID", Environment: "production",
-		Owner: "Finance Systems", Workload: "Nightly reporting", Criticality: "medium", State: StateActive,
-		RenewalHealth: RenewalAttention, ExpiresAt: now.Add(-3 * 24 * time.Hour), LastRotatedAt: now.Add(-93 * 24 * time.Hour),
-		RenewalPolicy: "90-day application credential", RenewalPeriod: 90 * 24 * time.Hour,
-	}, now.Add(-93*24*time.Hour), "identity.registered", "Registered from the Azure simulator", "demo-seed", "success")
-	store.addEvent("legacy-reporting", now.Add(-3*24*time.Hour), "renewal.alerted", "Credential expiry passed without a verified renewal", "policy-engine", "attention")
-
-	return store
+	store := &Store{
+		adapter:    adapter,
+		identities: make(map[string]protocol.MachineIdentity),
+		events:     make(map[string][]protocol.LifecycleEvent),
+		runs:       make(map[string][]protocol.RotationRun),
+	}
+	discovered, err := adapter.Discover(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: discover: %v", ErrProviderFailure, err)
+	}
+	for _, identity := range discovered {
+		if err := store.adopt(fixIdentity(identity), now); err != nil {
+			return nil, err
+		}
+	}
+	return store, nil
 }
 
-func (s *Store) addIdentity(identity Identity, eventAt time.Time, eventType, summary, actor, outcome string) {
+// fixIdentity fills the governance ID from the friendly name (demo convention:
+// provider registrations are discovered without a control-plane ID).
+func fixIdentity(identity protocol.MachineIdentity) protocol.MachineIdentity {
+	if identity.ID == "" {
+		identity.ID = identity.Name
+	}
+	if identity.Health == "" {
+		identity.Health = protocol.HealthHealthy
+	}
+	return identity
+}
+
+// adopt records a discovered identity as governed (active) and audits both the
+// discovery and the registration.
+func (s *Store) adopt(identity protocol.MachineIdentity, now time.Time) error {
+	now = now.UTC()
+	identity.CreatedAt = now
+	identity.UpdatedAt = now
+	identity.State = protocol.StateActive
+	if err := protocol.ValidateIdentity(&identity); err != nil {
+		return fmt.Errorf("adapter returned non-conformant identity %q: %w", identity.Name, err)
+	}
 	s.identities[identity.ID] = identity
-	s.addEvent(identity.ID, eventAt, eventType, summary, actor, outcome)
+	s.addEvent(identity.ID, now, protocol.EventIdentityDiscovered,
+		fmt.Sprintf("Discovered %s in the %s tenant", identity.Name, identity.Provider.Provider),
+		protocol.ActorDiscovery, protocol.OutcomeSuccess,
+		map[string]string{"provider_id": identity.Provider.ProviderID}, "")
+	s.addEvent(identity.ID, now, protocol.EventIdentityRegistered,
+		fmt.Sprintf("Registered %s into governance", identity.Name),
+		protocol.ActorControlPlane, protocol.OutcomeSuccess, nil, "")
+	return nil
 }
 
-func (s *Store) addEvent(identityID string, at time.Time, eventType, summary, actor, outcome string) {
+func (s *Store) addEvent(identityID string, at time.Time, eventType protocol.EventType, summary, actor string, outcome protocol.Outcome, details map[string]string, runID string) {
 	s.nextEvent++
-	s.events[identityID] = append(s.events[identityID], Event{
+	s.events[identityID] = append(s.events[identityID], protocol.LifecycleEvent{
 		ID: fmt.Sprintf("evt-%03d", s.nextEvent), IdentityID: identityID, Type: eventType,
-		Summary: summary, Actor: actor, Outcome: outcome, At: at.UTC(),
+		Summary: summary, Actor: actor, Outcome: outcome, At: at.UTC(), Details: details, RunID: runID,
 	})
 }
 
-func (s *Store) List() []Identity {
+// List returns governed identities ordered by expiry ascending.
+func (s *Store) List() []protocol.MachineIdentity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	identities := make([]Identity, 0, len(s.identities))
+	identities := make([]protocol.MachineIdentity, 0, len(s.identities))
 	for _, identity := range s.identities {
 		identities = append(identities, identity)
 	}
@@ -159,20 +109,22 @@ func (s *Store) List() []Identity {
 	return identities
 }
 
-func (s *Store) Get(id string) (Identity, bool) {
+// Get returns a single governed identity.
+func (s *Store) Get(id string) (protocol.MachineIdentity, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	identity, ok := s.identities[id]
 	return identity, ok
 }
 
-func (s *Store) Events(id string) ([]Event, bool) {
+// Events returns the audit events for an identity, newest first.
+func (s *Store) Events(id string) ([]protocol.LifecycleEvent, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, ok := s.identities[id]; !ok {
 		return nil, false
 	}
-	events := append([]Event(nil), s.events[id]...)
+	events := append([]protocol.LifecycleEvent(nil), s.events[id]...)
 	sort.SliceStable(events, func(i, j int) bool {
 		if events[i].At.Equal(events[j].At) {
 			return events[i].ID > events[j].ID
@@ -182,51 +134,238 @@ func (s *Store) Events(id string) ([]Event, bool) {
 	return events, true
 }
 
-func Transition(from, to State) error {
-	valid := (from == StateRegistered && to == StateActive) ||
-		(from == StateActive && (to == StateRenewing || to == StateRetired)) ||
-		(from == StateRenewing && to == StateActive)
-	if !valid {
-		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, to)
+// Runs returns the rotation runs for an identity, newest first.
+func (s *Store) Runs(id string) ([]protocol.RotationRun, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.identities[id]; !ok {
+		return nil, false
+	}
+	runs := append([]protocol.RotationRun(nil), s.runs[id]...)
+	sort.SliceStable(runs, func(i, j int) bool {
+		if runs[i].RequestedAt.Equal(runs[j].RequestedAt) {
+			return runs[i].ID > runs[j].ID
+		}
+		return runs[i].RequestedAt.After(runs[j].RequestedAt)
+	})
+	return runs, true
+}
+
+// Register provisions a new machine identity into governance. It validates the
+// request against protocol conformance rules, assigns an ID when absent, and
+// audits registration.
+func (s *Store) Register(ctx context.Context, req protocol.RegisterRequest, now time.Time) (protocol.RegisterResponse, error) {
+	if err := registerRequestConforms(req); err != nil {
+		return protocol.RegisterResponse{}, err
+	}
+	policyDuration, err := protocol.ParseISO8601Duration(req.Policy.RenewalPeriod)
+	if err != nil {
+		return protocol.RegisterResponse{}, fmt.Errorf("%w: renewal_period: %v", protocol.ErrConformance, err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now = now.UTC()
+
+	if req.ID == "" {
+		req.ID = req.Name
+	}
+	if _, exists := s.identities[req.ID]; exists {
+		return protocol.RegisterResponse{}, fmt.Errorf("identity %q already registered", req.ID)
+	}
+
+	identity := protocol.MachineIdentity{
+		ID:          req.ID,
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		Namespace:   req.Namespace,
+		Environment: req.Environment,
+		Provider:    req.Provider,
+		Ownership:   req.Ownership,
+		Policy:      req.Policy,
+		Credential:  req.Credential,
+		State:       protocol.StateActive,
+		Health:      protocol.HealthHealthy,
+		ExpiresAt:   now.Add(policyDuration),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	s.identities[identity.ID] = identity
+	s.addEvent(identity.ID, now, protocol.EventIdentityRegistered,
+		fmt.Sprintf("Registered %s into governance", identity.Name),
+		req.RequestedByOrDefault(), protocol.OutcomeSuccess, nil, "")
+
+	events := s.eventsSnapshotLocked(identity.ID)
+	return protocol.RegisterResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil
+}
+
+func registerRequestConforms(req protocol.RegisterRequest) error {
+	var errs protocol.ValidationErrors
+	if req.Name == "" {
+		errs = append(errs, "name is required")
+	}
+	if req.Provider.Provider == "" {
+		errs = append(errs, "provider.provider is required")
+	}
+	if req.Provider.ProviderID == "" {
+		errs = append(errs, "provider.provider_id is required")
+	}
+	if req.Ownership.Team == "" {
+		errs = append(errs, "ownership.team is required")
+	}
+	if req.Policy.RenewalPeriod == "" {
+		errs = append(errs, "policy.renewal_period is required")
+	} else if _, err := protocol.ParseISO8601Duration(req.Policy.RenewalPeriod); err != nil {
+		errs = append(errs, "policy.renewal_period is not a valid ISO-8601 duration")
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%w: %v", protocol.ErrConformance, errs)
 	}
 	return nil
 }
 
-// Rotate runs the simulator's synchronous renewal flow. A production adapter
-// would execute this boundary asynchronously and verify provider state before
-// returning to active.
-func (s *Store) Rotate(id string, now time.Time) (Identity, error) {
-	now = now.UTC()
+// Rotate starts and completes a renewal/rotation through the provider adapter,
+// emitting a correlated RotationRun and auditing events. On adapter failure the
+// identity returns to active with attention health so a retry stays possible.
+func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now = now.UTC()
 
-	identity, ok := s.identities[id]
+	identity, ok := s.identities[req.ID]
 	if !ok {
-		return Identity{}, ErrNotFound
+		return protocol.RotateResponse{}, ErrNotFound
 	}
-	if identity.State == StateRetired {
-		return Identity{}, ErrAlreadyRetired
+	if identity.State == protocol.StateRetired {
+		return protocol.RotateResponse{}, ErrAlreadyRetired
 	}
-	if identity.State == StateRenewing {
-		return Identity{}, ErrRotationInProgress
+	if identity.State == protocol.StateRenewing {
+		return protocol.RotateResponse{}, ErrRotationInProgress
 	}
-	if err := Transition(identity.State, StateRenewing); err != nil {
-		return Identity{}, err
+	if !protocol.CanTransition(identity.State, protocol.StateRenewing) {
+		return protocol.RotateResponse{}, fmt.Errorf("%w: %s -> renewing", ErrInvalidTransition, identity.State)
 	}
 
-	identity.State = StateRenewing
-	s.identities[id] = identity
-	s.addEvent(id, now, "rotation.started", "Rotation requested by the operator", "demo-operator", "in_progress")
-
-	period := identity.RenewalPeriod
-	if period <= 0 {
-		period = 90 * 24 * time.Hour
+	s.nextRun++
+	runID := fmt.Sprintf("run-%03d", s.nextRun)
+	operator := req.RequestedByOrDefault()
+	run := protocol.RotationRun{
+		ID: runID, IdentityID: identity.ID, Status: protocol.RotationRunning,
+		RequestedBy: operator, RequestedAt: now, StartedAt: now,
 	}
-	identity.State = StateActive
-	identity.RenewalHealth = RenewalHealthy
-	identity.ExpiresAt = now.Add(period)
+	runIndex := len(s.runs[identity.ID])
+	s.runs[identity.ID] = append(s.runs[identity.ID], run)
+
+	identity.State = protocol.StateRenewing
+	s.identities[identity.ID] = identity
+	s.addEvent(identity.ID, now, protocol.EventRotationRequested,
+		"Rotation requested by "+operator, operator, protocol.OutcomeInProgress,
+		map[string]string{"reason": req.Reason}, runID)
+	s.addEvent(identity.ID, now, protocol.EventRotationStarted,
+		"Rotation dispatched to "+identity.Provider.Provider, protocol.ActorControlPlane,
+		protocol.OutcomeInProgress, nil, runID)
+
+	// The demo holds the store lock while invoking the (in-memory) provider
+	// adapter so the renewing state cannot be mutated concurrently. A production
+	// control plane should release the lock, execute the provider call
+	// asynchronously, and reconcile the outcome when it resolves.
+	adapter := s.adapter
+	providerView, adapterErr := adapter.Rotate(ctx, identity)
+
+	if adapterErr != nil {
+		identity.State = protocol.StateActive
+		identity.Health = protocol.HealthAttention
+		s.identities[identity.ID] = identity
+		run.Status = protocol.RotationFailed
+		run.Outcome = protocol.OutcomeFailure
+		run.FinishedAt = now
+		run.Error = adapterErr.Error()
+		s.runs[identity.ID][runIndex] = run
+		s.addEvent(identity.ID, now, protocol.EventRotationFailed,
+			"Rotation failed at the provider: "+adapterErr.Error(), protocol.ActorProviderAdapter,
+			protocol.OutcomeFailure, nil, runID)
+		return protocol.RotateResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
+	}
+
+	// Governance is authoritative for expiry; the provider supplies evidence.
+	duration, _ := protocol.ParseISO8601Duration(identity.Policy.RenewalPeriod)
+	identity = providerView
+	identity.ID = req.ID
+	identity.State = protocol.StateActive
+	identity.Health = protocol.HealthHealthy
+	identity.ExpiresAt = now.Add(duration)
 	identity.LastRotatedAt = now
-	s.identities[id] = identity
-	s.addEvent(id, now, "rotation.completed", "New credential verified against simulated provider state", "rotation-simulator", "success")
-	return identity, nil
+	identity.UpdatedAt = now
+	s.identities[identity.ID] = identity
+
+	run.Status = protocol.RotationSucceeded
+	run.Outcome = protocol.OutcomeSuccess
+	run.FinishedAt = now
+	run.Evidence = identity.Credential
+	s.runs[identity.ID][runIndex] = run
+	s.addEvent(identity.ID, now, protocol.EventRotationCompleted,
+		"New credential verified against provider state", protocol.ActorProviderAdapter,
+		protocol.OutcomeSuccess,
+		map[string]string{"key_id": identity.Credential.KeyID, "fingerprint": identity.Credential.Fingerprint}, runID)
+
+	events := s.eventsSnapshotLocked(identity.ID)
+	return protocol.RotateResponse{
+		APIVersion: protocol.Version, Identity: identity, Rotation: run, Events: events,
+	}, nil
+}
+
+// Retire decommissions an identity through an explicit lifecycle transition,
+// requiring an explicit confirmation. The provider adapter is then asked to
+// disable the registration.
+func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error) {
+	if !req.Confirm {
+		return protocol.RetireResponse{}, ErrConfirmationNeeded
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now = now.UTC()
+
+	identity, ok := s.identities[req.ID]
+	if !ok {
+		return protocol.RetireResponse{}, ErrNotFound
+	}
+	if identity.State == protocol.StateRetired {
+		return protocol.RetireResponse{}, ErrAlreadyRetired
+	}
+	if !protocol.CanTransition(identity.State, protocol.StateRetired) {
+		return protocol.RetireResponse{}, fmt.Errorf("%w: %s -> retired", ErrInvalidTransition, identity.State)
+	}
+
+	adapter := s.adapter
+	providerView, adapterErr := adapter.Retire(ctx, identity)
+	if adapterErr != nil {
+		return protocol.RetireResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
+	}
+
+	operator := req.RequestedByOrDefault()
+	identity = providerView
+	identity.ID = req.ID
+	identity.State = protocol.StateRetired
+	identity.Health = protocol.HealthAttention
+	identity.UpdatedAt = now
+	s.identities[identity.ID] = identity
+	s.addEvent(identity.ID, now, protocol.EventIdentityRetired,
+		"Retired "+identity.Name+" ("+req.Reason+")", operator, protocol.OutcomeSuccess, nil, "")
+
+	events := s.eventsSnapshotLocked(identity.ID)
+	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil
+}
+
+func (s *Store) eventsSnapshotLocked(id string) []protocol.LifecycleEvent {
+	return append([]protocol.LifecycleEvent(nil), s.events[id]...)
+}
+
+// Transition validates a lifecycle state change against the protocol's
+// canonical state machine. It exists as a standalone guard for callers that
+// reason about transitions directly.
+func Transition(from, to protocol.State) error {
+	if !protocol.CanTransition(from, to) {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, to)
+	}
+	return nil
 }

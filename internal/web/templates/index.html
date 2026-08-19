@@ -21,7 +21,7 @@
         <a class="active" href="#overview">Overview</a>
         <a href="#inventory">Identities</a>
         <a href="#activity-panel">Audit trail</a>
-        <span class="environment-chip"><span class="status-dot"></span> Simulator</span>
+        <span class="environment-chip"><span class="status-dot"></span> Azure simulator</span>
       </nav>
     </header>
 
@@ -106,8 +106,8 @@
     </main>
 
     <footer class="footer">
-      <span>μTandae Protocol · open-core lifecycle demo</span>
-      <span>Provider adapter: <strong>local simulator</strong></span>
+      <span>μTandae Protocol v1 · open-core lifecycle demo</span>
+      <span>Provider adapter: <strong>{{ .ProviderLabel }}</strong> · tenant <code>{{ .TenantID }}</code></span>
     </footer>
   </div>
 </body>

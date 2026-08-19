@@ -57,6 +57,7 @@ type MachineIdentity struct {
 	Name          string              `json:"name"`
 	DisplayName   string              `json:"display_name,omitempty"`
 	Namespace     string              `json:"namespace,omitempty"`
+	Environment   string              `json:"environment,omitempty"`
 	Provider      ProviderBinding     `json:"provider,omitempty"`
 	Ownership     Ownership           `json:"ownership,omitempty"`
 	Policy        LifecyclePolicy     `json:"policy,omitempty"`

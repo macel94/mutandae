@@ -11,12 +11,25 @@ import (
 	"time"
 
 	"github.com/mutandae/mutandae/internal/lifecycle"
+	"github.com/mutandae/mutandae/internal/provider"
 	"github.com/mutandae/mutandae/internal/web"
 )
 
 func main() {
 	port := envInt("PORT", 8080)
-	store := lifecycle.NewDemoStore(time.Now())
+
+	// Composition root: wire the provider-aware execution boundary to the
+	// control plane. The demo starts from Azure: a simulated Entra ID tenant
+	// exposes its application registrations, which the control plane discovers
+	// and governs over the μTandae Protocol.
+	now := time.Now()
+	tenantID := envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo")
+	adapter := provider.NewSimulator(tenantID, now)
+	store, err := lifecycle.NewStore(context.Background(), now, adapter)
+	if err != nil {
+		log.Fatalf("initialise control plane: %v", err)
+	}
+
 	handler, err := web.NewServer(web.Dependencies{
 		Lifecycle: store,
 		Clock:     time.Now,
@@ -37,6 +50,7 @@ func main() {
 
 	go func() {
 		log.Printf("Mutandae demo listening on http://localhost:%d (Classical Latin: moo-TAHN-dye)", port)
+		log.Printf("Provider adapter: %s (simulated tenant %s)", adapter.Kind(), tenantID)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
@@ -64,4 +78,11 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return port
+}
+
+func envString(name string, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
