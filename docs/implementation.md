@@ -1,5 +1,11 @@
 # Demo implementation
 
+## Native production delivery record
+
+The complete native-production delivery, troubleshooting history, attestation
+compatibility findings, and final verification are documented in
+[`docs/native-production-delivery.md`](native-production-delivery.md).
+
 This repository now contains the first runnable Mutandae vertical slice: an in-memory control-plane shell for inspecting machine identities, seeing ownership and expiry, triggering a simulated rotation, and inspecting correlated lifecycle events.
 
 ## Product name and pronunciation
