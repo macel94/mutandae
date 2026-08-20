@@ -82,8 +82,9 @@ GitOps commit to reconcile, and verify Flux plus live behavior.
 
 The hosted rollout was verified on the native cluster:
 
-- Flux root revision: `main@sha1:cff5f099`.
-- Mutandae application revision: `main@sha1:7d25b28`.
+- Flux root revision: `main@sha1:ac991d1d`.
+- Mutandae application revision: `main@sha1:c54535f`.
+- Application image: `ghcr.io/macel94/mutandae:sha-0e8f612f2066af3e30e69c9acc302539bcbac5c3@sha256:4f1d5bfbef53a2395cbb4930230c7f07ab190572b2d203fa478de3be138b552f`.
 - Redis StatefulSet: `1/1` ready.
 - Redis PVC: `5Gi`, `Bound`, Longhorn-backed.
 - Live and preview Deployments: `1/1`, using the same immutable image digest.
@@ -93,9 +94,15 @@ The hosted rollout was verified on the native cluster:
   `persistence: redis` and `read_only: true`.
 - A preview rotation changed the preview identity response while the live
   identity response remained unchanged.
-- `TestRedisRepositoryRealServerSnapshotIsolationAndPubSub` passed through a
-  temporary port-forward against the real Redis Service using a unique
-  `mutandae:test:<run>` prefix; cleanup scans and deletes only that prefix.
+- Live and preview `/api/v1/integration/requirements` both report exactly
+  `Application.ReadWrite.OwnedBy` and the documented optional Key Vault roles.
+- All three native edge IPs returned HTTP 200 for both live and preview API
+  discovery requests.
+- `TestRedisRepositoryRealServerSnapshotIsolationAndPubSub` and
+  `TestRedisEventPublisherRealServerReceiptAndNotification` passed through a
+  temporary port-forward against the real Redis Service using unique
+  `mutandae:test:<run>` prefixes; cleanup scans and deletes only matching
+  prefixes.
 
 ## Local Redis
 
