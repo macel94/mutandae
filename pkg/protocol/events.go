@@ -32,6 +32,17 @@ const (
 	EventRotationRollBack  EventType = "rotation.rolled_back"
 )
 
+// Interactive provider integration events. These events may be published to
+// Redis, but their details must remain redacted and secret-free.
+const (
+	EventIntegrationConnected EventType = "integration.connected"
+	EventApplicationCreated   EventType = "application.created"
+	EventSecretCreated        EventType = "secret.created"
+	EventSecretRead           EventType = "secret.read"
+	EventSecretInvalidated    EventType = "secret.invalidated"
+	EventIntegrationClosed    EventType = "integration.closed"
+)
+
 // Decommissioning events.
 const (
 	EventIdentityRetired     EventType = "identity.retired"

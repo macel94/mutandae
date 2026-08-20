@@ -4,8 +4,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Mutandae public demo configuration">
-  <title>Mutandae · Demo configuration</title>
+  <meta name="description" content="Mutandae demo and optional Azure integration configuration">
+  <title>Mutandae · Configuration</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -18,18 +18,18 @@
         <span class="environment-chip"><span class="status-dot"></span>{{ .Environment }}</span>
       </nav>
     </header>
-    <main class="configuration-page">
+    <main class="configuration-page" id="configuration-app">
       <section class="hero configuration-hero">
         <div class="hero-copy">
-          <p class="eyebrow">Public demo · read-only configuration <span class="eyebrow-line"></span></p>
-          <h1>See how this<br><em>demo is shaped.</em></h1>
-          <p class="hero-lede">This page describes the synthetic environment. It does not connect to Azure, accept credentials, or change runtime settings.</p>
+          <p class="eyebrow">Public demo · configuration and integration <span class="eyebrow-line"></span></p>
+          <h1>Connect what<br><em>you own.</em></h1>
+          <p class="hero-lede">Explore the simulator safely, or open a short-lived session against an Azure / Entra tenant you control. Real-tenant credentials never enter Redis, snapshots, events, logs, or HTML.</p>
         </div>
       </section>
-      <section class="config-warning" role="note">
-        <strong>Safe to explore.</strong> This deployment uses synthetic Azure/Entra data. No Azure tenant, client secret, certificate, access key, Redis password, or other secret material is accepted or shown here.
+      <section class="config-warning" role="alert">
+        <strong>Security warning.</strong> Only use a temporary client secret for a tenant you own. Mutandae holds it in process memory for at most ten minutes and clears it when the session ends. After trying the demo, <strong>invalidate this client secret in Entra ID and remove its consent if you no longer need it.</strong>
       </section>
-      <section class="config-grid" aria-label="Demo configuration details">
+      <section class="config-grid" aria-label="Runtime configuration details">
         <article class="panel config-card">
           <p class="section-kicker">Runtime</p>
           <h2>Environment contract</h2>
@@ -42,23 +42,74 @@
           </dl>
         </article>
         <article class="panel config-card">
-          <p class="section-kicker">Capabilities</p>
+          <p class="section-kicker">Demo mode</p>
           <h2>What is enabled</h2>
           <ul class="feature-list">
             {{ range .Features }}<li><span class="status-dot"></span>{{ . }}</li>{{ end }}
+            {{ if .IntegrationEnabled }}<li><span class="status-dot"></span>Optional ephemeral Azure integration</li>{{ end }}
           </ul>
-          <p class="muted">Configuration is intentionally read-only. Use the dashboard to explore lifecycle actions against demo data.</p>
+          <p class="muted">The runtime configuration itself is read-only. The optional integration is an isolated, expiring operator session—not a deployment setting.</p>
         </article>
       </section>
+      {{ if .IntegrationEnabled }}
+      <section class="panel config-card integration-panel" aria-labelledby="integration-title">
+        <p class="section-kicker">Optional · bring your own tenant</p>
+        <h2 id="integration-title">Try the official Azure protocol path</h2>
+        <p class="muted">Mutandae uses Microsoft Graph application APIs with the least-privileged application permission required for the operations below. It checks Graph ownership before every mutation.</p>
+        <div class="requirements-grid">
+          <div>
+            <h3>Required in Entra ID</h3>
+            <p><code>{{ .Requirements.GraphApplicationPermission }}</code></p>
+            <ul class="feature-list compact-list">{{ range .Requirements.GraphOperations }}<li><span class="status-dot"></span>{{ . }}</li>{{ end }}</ul>
+          </div>
+          <div>
+            <h3>Optional vault retrieval</h3>
+            <p>Use an existing Azure Key Vault to retrieve a generated secret after Graph's one-time response expires.</p>
+            <ul class="feature-list compact-list">
+              <li><span class="status-dot"></span>Write: <code>{{ .Requirements.VaultWriteRole }}</code></li>
+              <li><span class="status-dot"></span>Read: <code>{{ .Requirements.VaultReadRole }}</code></li>
+              <li><span class="status-dot"></span>Owner-only access must be enforced by Azure RBAC/delegated identity.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="integration-warnings">
+          {{ range .Requirements.Warnings }}<p>⚠ {{ . }}</p>{{ end }}
+        </div>
+        <form id="integration-connect-form" class="integration-form" autocomplete="off">
+          <div class="form-grid">
+            <label>Tenant ID<input name="tenant_id" required maxlength="256" placeholder="tenant GUID or verified tenant domain"></label>
+            <label>Client ID<input name="client_id" required inputmode="uuid" maxlength="36" placeholder="application (client) ID"></label>
+            <label class="span-two">Client password<input name="client_secret" required type="password" maxlength="4096" autocomplete="new-password" placeholder="temporary client secret"><small>Write-only input. It will not be shown again.</small></label>
+          </div>
+          <label class="checkbox-row"><input id="vault-enabled" name="vault_enabled" type="checkbox"> Store generated secrets in an existing Key Vault for later versioned retrieval</label>
+          <div id="vault-fields" class="form-grid is-hidden">
+            <label class="span-two">Key Vault URL<input name="vault_url" type="url" placeholder="https://your-vault.vault.azure.net"></label>
+            <label>Secret name prefix<input name="secret_prefix" maxlength="40" value="mutandae"></label>
+            <label>Owner object IDs<input name="owner_object_ids" placeholder="comma-separated GUIDs"><small>Metadata only; Azure RBAC remains authoritative.</small></label>
+          </div>
+          <button class="button button-primary" type="submit">Connect for 10 minutes</button>
+          <p id="integration-status" class="form-status" role="status"></p>
+        </form>
+      </section>
+      <section id="integration-workspace" class="panel config-card integration-panel is-hidden" aria-labelledby="workspace-title">
+        <div class="panel-heading integration-heading"><div><p class="section-kicker">Ephemeral session</p><h2 id="workspace-title">Your owned applications</h2></div><button id="disconnect-button" class="button button-secondary" type="button">Disconnect and clear credentials</button></div>
+        <p id="session-summary" class="muted"></p>
+        <div class="form-grid app-create-form"><label class="span-two">New application display name<input id="new-application-name" maxlength="120" placeholder="mutandae-demo-owned-app"></label><button id="create-application-button" class="button button-primary" type="button">Create application</button></div>
+        <div id="application-list" class="application-list"></div>
+        <div id="secret-output" class="secret-output is-hidden" role="alert"></div>
+      </section>
+      {{ end }}
       <section class="panel config-card config-next">
         <p class="section-kicker">Continue the walkthrough</p>
-        <h2>Try the protocol path</h2>
-        <p>Return to the dashboard, inspect <strong>payments-api</strong>, rotate it, and follow the correlated lifecycle events. The API discovery document is available at <code>/api/v1/</code>.</p>
+        <h2>Try the simulator first</h2>
+        <p>Return to the dashboard to inspect synthetic identities, rotate a credential, and follow the correlated lifecycle events. The API discovery document is available at <code>/api/v1/</code>.</p>
         <a class="button button-secondary" href="/">Open demo dashboard</a>
       </section>
     </main>
-    <footer class="footer"><span>μTandae Protocol v1 · synthetic demo</span><span>Read-only configuration · updated {{ .UpdatedAt.Format "Jan 02, 2006 · 15:04 MST" }}</span></footer>
+    <footer class="footer"><span>μTandae Protocol v1 · Azure-first lifecycle demo</span><span>Safe runtime configuration · updated {{ .UpdatedAt.Format "Jan 02, 2006 · 15:04 MST" }}</span></footer>
   </div>
+<script src="/static/integration.js" defer></script>
+<!-- The integration script is an external static asset so the CSP does not allow inline JavaScript. -->
 </body>
 </html>
 {{ end }}

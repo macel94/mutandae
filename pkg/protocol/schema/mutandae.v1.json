@@ -32,6 +32,42 @@
     },
     {
       "$ref": "#/$defs/DiscoveryIndex"
+    },
+    {
+      "$ref": "#/$defs/AzureIntegrationRequest"
+    },
+    {
+      "$ref": "#/$defs/AzureIntegrationRequirementsResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureIntegrationResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureApplicationsResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureApplicationResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureApplicationCreateRequest"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretCreateRequest"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretReadRequest"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretInvalidateRequest"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretReadResponse"
+    },
+    {
+      "$ref": "#/$defs/AzureSecretInvalidateResponse"
     }
   ],
   "$defs": {
@@ -398,12 +434,194 @@
         "rotation.rolled_back",
         "identity.retired",
         "identity.revoked",
-        "identity.resurrected"
+        "identity.resurrected",
+        "integration.connected",
+        "application.created",
+        "secret.created",
+        "secret.read",
+        "secret.invalidated",
+        "integration.closed"
       ]
     },
     "ISO8601Duration": {
       "type": "string",
       "pattern": "^(?:P(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:D|W))+(?:T(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))*)?|PT(?:(?:[0-9]+(?:\\.[0-9]+)?)(?:H|M|S))+)$"
+    },
+    "VaultConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "secret_prefix": {"type": "string"},
+        "owner_object_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}}
+      },
+      "required": ["url"]
+    },
+    "AzureIntegrationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tenant_id": {"type": "string", "minLength": 1},
+        "client_id": {"type": "string", "format": "uuid"},
+        "client_secret": {"type": "string", "minLength": 1},
+        "vault": {"$ref": "#/$defs/VaultConfiguration"},
+        "requested_by": {"type": "string"}
+      },
+      "required": ["tenant_id", "client_id", "client_secret"]
+    },
+    "AzureIntegrationRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "graph_application_permission": {"type": "string"},
+        "graph_operations": {"type": "array", "items": {"type": "string"}},
+        "vault_optional": {"type": "boolean"},
+        "vault_write_role": {"type": "string"},
+        "vault_read_role": {"type": "string"},
+        "owner_enforcement": {"type": "string"},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["graph_application_permission", "graph_operations", "vault_optional", "owner_enforcement", "warnings"]
+    },
+    "AzureIntegrationSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "provider": {"type": "string"},
+        "tenant_hint": {"type": "string"},
+        "client_hint": {"type": "string"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "vault_configured": {"type": "boolean"},
+        "capabilities": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["id", "provider", "tenant_hint", "client_hint", "expires_at", "vault_configured", "capabilities"]
+    },
+    "AzureIntegrationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "correlation_id": {"type": "string"},
+        "at": {"type": "string", "format": "date-time"},
+        "outcome": {"$ref": "#/$defs/Outcome"},
+        "provider": {"type": "string"},
+        "application_id": {"type": "string"},
+        "details": {"$ref": "#/$defs/Metadata"}
+      },
+      "required": ["id", "type", "correlation_id", "at", "outcome", "provider"]
+    },
+    "OperationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "correlation_id": {"type": "string"},
+        "event_published": {"type": "boolean"},
+        "event": {"$ref": "#/$defs/AzureIntegrationEvent"}
+      },
+      "required": ["id", "correlation_id", "event_published", "event"]
+    },
+    "AzureCredential": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key_id": {"type": "string"},
+        "display_name": {"type": "string"},
+        "start_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "hint": {"type": "string"},
+        "vault": {"$ref": "#/$defs/VaultReference"}
+      },
+      "required": ["key_id"]
+    },
+    "VaultReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "secret_name": {"type": "string"},
+        "version": {"type": "string"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "owner_object_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}}
+      },
+      "required": ["url", "secret_name"]
+    },
+    "AzureApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "object_id": {"type": "string", "format": "uuid"},
+        "application_id": {"type": "string", "format": "uuid"},
+        "display_name": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "owned_by_calling_client": {"type": "boolean"},
+        "credentials": {"type": "array", "items": {"$ref": "#/$defs/AzureCredential"}}
+      },
+      "required": ["object_id", "application_id", "display_name", "owned_by_calling_client"]
+    },
+    "AzureSecretResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential": {"$ref": "#/$defs/AzureCredential"},
+        "secret_text": {"type": "string"},
+        "one_time": {"type": "boolean"},
+        "vault": {"$ref": "#/$defs/VaultReference"}
+      },
+      "required": ["credential", "one_time"]
+    },
+    "AzureIntegrationRequirementsResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "requirements": {"$ref": "#/$defs/AzureIntegrationRequirements"}},
+      "required": ["api_version", "requirements"]
+    },
+    "AzureIntegrationResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "session": {"$ref": "#/$defs/AzureIntegrationSession"}, "csrf_token": {"type": "string"}},
+      "required": ["api_version", "session"]
+    },
+    "AzureApplicationsResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "applications": {"type": "array", "items": {"$ref": "#/$defs/AzureApplication"}}, "receipt": {"$ref": "#/$defs/OperationReceipt"}, "error": {"$ref": "#/$defs/Error"}},
+      "required": ["api_version", "applications"]
+    },
+    "AzureApplicationResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "application": {"$ref": "#/$defs/AzureApplication"}, "receipt": {"$ref": "#/$defs/OperationReceipt"}, "error": {"$ref": "#/$defs/Error"}},
+      "required": ["api_version", "application"]
+    },
+    "AzureApplicationCreateRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"display_name": {"type": "string", "minLength": 1}},
+      "required": ["display_name"]
+    },
+    "AzureSecretCreateRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"application_object_id": {"type": "string", "format": "uuid"}, "display_name": {"type": "string", "minLength": 1}, "expires_at": {"type": "string", "format": "date-time"}, "store_in_vault": {"type": "boolean"}},
+      "required": ["application_object_id", "display_name", "store_in_vault"]
+    },
+    "AzureSecretReadRequest": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"application_object_id": {"type": "string", "format": "uuid"}, "key_id": {"type": "string", "format": "uuid"}, "version": {"type": "string"}},
+      "required": ["application_object_id", "key_id"]
+    },
+    "AzureSecretInvalidateRequest": {
+      "$ref": "#/$defs/AzureSecretReadRequest"
+    },
+    "AzureSecretResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "secret": {"$ref": "#/$defs/AzureSecretResult"}, "receipt": {"$ref": "#/$defs/OperationReceipt"}, "error": {"$ref": "#/$defs/Error"}},
+      "required": ["api_version", "secret", "receipt"]
+    },
+    "AzureSecretReadResponse": {
+      "$ref": "#/$defs/AzureSecretResponse"
+    },
+    "AzureSecretInvalidateResponse": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"api_version": {"const": "v1"}, "credential": {"$ref": "#/$defs/AzureCredential"}, "receipt": {"$ref": "#/$defs/OperationReceipt"}, "error": {"$ref": "#/$defs/Error"}},
+      "required": ["api_version", "credential", "receipt"]
     },
     "Error": {
       "type": "object",

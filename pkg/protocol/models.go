@@ -50,6 +50,115 @@ type CredentialReference struct {
 // key/value notes without breaking version conformance.
 type Metadata map[string]string
 
+// AzureIntegrationRequest is accepted only by the interactive integration
+// endpoint. ClientSecret is write-only: it must never be copied into a
+// response, event, snapshot, log, or HTML template.
+type AzureIntegrationRequest struct {
+	TenantID     string              `json:"tenant_id"`
+	ClientID     string              `json:"client_id"`
+	ClientSecret string              `json:"client_secret"`
+	Vault        *VaultConfiguration `json:"vault,omitempty"`
+	RequestedBy  string              `json:"requested_by,omitempty"`
+}
+
+// VaultConfiguration describes an existing Azure Key Vault that may receive
+// newly-created credentials. Mutandae does not create vaults or role
+// assignments; the supplied client must already have the required data-plane
+// permissions.
+type VaultConfiguration struct {
+	URL            string   `json:"url"`
+	SecretPrefix   string   `json:"secret_prefix,omitempty"`
+	OwnerObjectIDs []string `json:"owner_object_ids,omitempty"`
+}
+
+// VaultReference is safe to persist and return. It identifies a vault secret
+// version but never contains the secret value.
+type VaultReference struct {
+	URL            string    `json:"url"`
+	SecretName     string    `json:"secret_name"`
+	Version        string    `json:"version,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	OwnerObjectIDs []string  `json:"owner_object_ids,omitempty"`
+}
+
+// AzureIntegrationSession is the redacted view of an in-memory interactive
+// session. Tenant and client IDs are intentionally shortened in responses.
+type AzureIntegrationSession struct {
+	ID              string    `json:"id"`
+	Provider        string    `json:"provider"`
+	TenantHint      string    `json:"tenant_hint"`
+	ClientHint      string    `json:"client_hint"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	VaultConfigured bool      `json:"vault_configured"`
+	Capabilities    []string  `json:"capabilities"`
+}
+
+// AzureIntegrationRequirements describes the least-privilege contract shown
+// before a user submits credentials.
+type AzureIntegrationRequirements struct {
+	GraphApplicationPermission string   `json:"graph_application_permission"`
+	GraphOperations            []string `json:"graph_operations"`
+	VaultOptional              bool     `json:"vault_optional"`
+	VaultWriteRole             string   `json:"vault_write_role,omitempty"`
+	VaultReadRole              string   `json:"vault_read_role,omitempty"`
+	OwnerEnforcement           string   `json:"owner_enforcement"`
+	Warnings                   []string `json:"warnings"`
+}
+
+// AzureIntegrationEvent is a redacted operation event. It is suitable for
+// Redis pub/sub and an optional short-lived Redis event receipt; it must never
+// contain ClientSecret, access tokens, or SecretText.
+type AzureIntegrationEvent struct {
+	ID            string            `json:"id"`
+	Type          string            `json:"type"`
+	CorrelationID string            `json:"correlation_id"`
+	At            time.Time         `json:"at"`
+	Outcome       Outcome           `json:"outcome"`
+	Provider      string            `json:"provider"`
+	ApplicationID string            `json:"application_id,omitempty"`
+	Details       map[string]string `json:"details,omitempty"`
+}
+
+// OperationReceipt proves that the control-plane operation emitted a redacted
+// event. It does not prove a distributed transaction with Azure; provider
+// changes and Redis publication are separate systems.
+type OperationReceipt struct {
+	ID             string                `json:"id"`
+	CorrelationID  string                `json:"correlation_id"`
+	EventPublished bool                  `json:"event_published"`
+	Event          AzureIntegrationEvent `json:"event"`
+}
+
+// AzureApplication is a safe subset of an Entra application registration.
+type AzureApplication struct {
+	ObjectID             string            `json:"object_id"`
+	ApplicationID        string            `json:"application_id"`
+	DisplayName          string            `json:"display_name"`
+	CreatedAt            time.Time         `json:"created_at,omitempty"`
+	OwnedByCallingClient bool              `json:"owned_by_calling_client"`
+	Credentials          []AzureCredential `json:"credentials,omitempty"`
+}
+
+// AzureCredential contains Graph metadata only. SecretText is never included
+// here because Microsoft Graph does not return it after creation.
+type AzureCredential struct {
+	KeyID       string          `json:"key_id"`
+	DisplayName string          `json:"display_name,omitempty"`
+	StartAt     time.Time       `json:"start_at,omitempty"`
+	ExpiresAt   time.Time       `json:"expires_at,omitempty"`
+	Hint        string          `json:"hint,omitempty"`
+	Vault       *VaultReference `json:"vault,omitempty"`
+}
+
+// AzureSecretResult is returned by a create operation. SecretText is
+// intentionally one-time: callers must copy it or enable vault storage first.
+type AzureSecretResult struct {
+	Credential AzureCredential `json:"credential"`
+	SecretText string          `json:"secret_text,omitempty"`
+	OneTime    bool            `json:"one_time"`
+	Vault      *VaultReference `json:"vault,omitempty"`
+}
+
 // MachineIdentity is the controlled, versioned representation of a governed
 // non-human identity as it crosses cloud adapter ↔ control plane ↔ frontend.
 type MachineIdentity struct {

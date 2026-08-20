@@ -2,10 +2,13 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -52,6 +55,7 @@ type Logger interface {
 type Dependencies struct {
 	Lifecycle     LifecycleService
 	Configuration ConfigurationService
+	Integration   lifecycle.IntegrationService
 	Clock         Clock
 	Logger        Logger
 }
@@ -63,6 +67,7 @@ type Server struct {
 	now           Clock
 	logger        Logger
 	configuration ConfigurationService
+	integration   lifecycle.IntegrationService
 }
 
 var _ LifecycleService = (*lifecycle.Store)(nil)
@@ -115,6 +120,7 @@ func newServer(deps Dependencies) (*Server, error) {
 	return &Server{
 		lifecycle:     deps.Lifecycle,
 		configuration: deps.Configuration,
+		integration:   deps.Integration,
 		templates:     templates,
 		static:        static,
 		now:           deps.Clock,
@@ -127,6 +133,15 @@ func (s *Server) routes() http.Handler {
 	// Server-rendered frontend (HTMX + Alpine).
 	mux.HandleFunc("GET /{$}", s.dashboard)
 	mux.HandleFunc("GET /configuration", s.configurationPage)
+	mux.HandleFunc("GET /api/v1/integration/requirements", s.apiIntegrationRequirements)
+	mux.HandleFunc("POST /api/v1/integration/connect", s.apiIntegrationConnect)
+	mux.HandleFunc("GET /api/v1/integration/session", s.apiIntegrationSession)
+	mux.HandleFunc("POST /api/v1/integration/disconnect", s.apiIntegrationDisconnect)
+	mux.HandleFunc("GET /api/v1/integration/applications", s.apiIntegrationApplications)
+	mux.HandleFunc("POST /api/v1/integration/applications", s.apiIntegrationCreateApplication)
+	mux.HandleFunc("POST /api/v1/integration/secrets", s.apiIntegrationCreateSecret)
+	mux.HandleFunc("POST /api/v1/integration/secrets/read", s.apiIntegrationReadSecret)
+	mux.HandleFunc("POST /api/v1/integration/secrets/invalidate", s.apiIntegrationInvalidateSecret)
 	mux.HandleFunc("GET /partials/identities", s.identityList)
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
@@ -143,7 +158,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /livez", s.health)
 	mux.HandleFunc("GET /readyz", s.health)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
-	return mux
+	return securityHeaders(mux)
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +166,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "configuration", s.configuration.Configuration())
+	view := configurationPageView{Configuration: s.configuration.Configuration()}
+	if s.integration != nil {
+		view.IntegrationEnabled = true
+		view.Requirements = s.integration.Requirements()
+	}
+	ensureCSRFCookie(w, r)
+	s.render(w, "configuration", view)
 }
 
 func (s *Server) identityList(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +231,14 @@ func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
 		MediaType:  protocol.MediaType,
 		Resources: []protocol.DiscoveryResource{
 			{Rel: "configuration", Method: http.MethodGet, HREF: "/api/v1/configuration", Envelope: "configuration"},
+			{Rel: "integration-requirements", Method: http.MethodGet, HREF: "/api/v1/integration/requirements", Envelope: "requirements"},
+			{Rel: "integration-connect", Method: http.MethodPost, HREF: "/api/v1/integration/connect", Envelope: "integration"},
+			{Rel: "integration-session", Method: http.MethodGet, HREF: "/api/v1/integration/session", Envelope: "integration"},
+			{Rel: "applications", Method: http.MethodGet, HREF: "/api/v1/integration/applications", Envelope: "applications"},
+			{Rel: "application-create", Method: http.MethodPost, HREF: "/api/v1/integration/applications", Envelope: "application"},
+			{Rel: "secret-create", Method: http.MethodPost, HREF: "/api/v1/integration/secrets", Envelope: "secret"},
+			{Rel: "secret-read", Method: http.MethodPost, HREF: "/api/v1/integration/secrets/read", Envelope: "secret"},
+			{Rel: "secret-invalidate", Method: http.MethodPost, HREF: "/api/v1/integration/secrets/invalidate", Envelope: "secret"},
 			{Rel: "identities", Method: http.MethodGet, HREF: "/api/v1/identities", Envelope: "list"},
 			{Rel: "identity", Method: http.MethodGet, HREF: "/api/v1/identities/{id}", Envelope: "inspect"},
 			{Rel: "register", Method: http.MethodPost, HREF: "/api/v1/identities", Envelope: "register"},
@@ -224,6 +253,222 @@ func (s *Server) apiConfiguration(w http.ResponseWriter, r *http.Request) {
 		APIVersion:    protocol.Version,
 		Configuration: s.configuration.Configuration(),
 	})
+}
+
+func (s *Server) apiIntegrationRequirements(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, protocol.AzureIntegrationRequirementsResponse{APIVersion: protocol.Version, Requirements: s.integration.Requirements()})
+}
+
+func (s *Server) apiIntegrationConnect(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if !requestIsSecure(r) && r.RemoteAddr != "" && !strings.HasPrefix(r.RemoteAddr, "127.0.0.1:") && !strings.HasPrefix(r.RemoteAddr, "[::1]:") {
+		s.writeIntegrationFailure(w, http.StatusUpgradeRequired, "real-tenant credentials require HTTPS")
+		return
+	}
+	var req protocol.AzureIntegrationRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.writeIntegrationFailure(w, http.StatusBadRequest, "invalid integration request")
+		return
+	}
+	csrf := csrfCookie(r)
+	session, sessionCSRF, err := s.integration.Connect(r.Context(), req, csrf, integrationRateKey(r), s.now())
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	setCookie(w, r, integrationSessionCookie, session.ID, true)
+	setCookie(w, r, csrfCookieName, sessionCSRF, false)
+	s.writeJSON(w, http.StatusOK, protocol.AzureIntegrationResponse{APIVersion: protocol.Version, Session: session, CSRFToken: sessionCSRF})
+}
+
+func (s *Server) apiIntegrationSession(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	sessionID, ok := requestCookie(r, integrationSessionCookie)
+	if !ok {
+		s.writeIntegrationFailure(w, http.StatusUnauthorized, lifecycle.ErrIntegrationSessionNotFound.Error())
+		return
+	}
+	session, err := s.integration.SessionView(sessionID, csrfCookie(r), s.now())
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, protocol.AzureIntegrationResponse{APIVersion: protocol.Version, Session: session})
+}
+
+func (s *Server) apiIntegrationDisconnect(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if sessionID, ok := requestCookie(r, integrationSessionCookie); ok {
+		s.integration.Disconnect(sessionID)
+	}
+	clearCookie(w, r, integrationSessionCookie, true)
+	s.writeJSON(w, http.StatusOK, map[string]any{"api_version": protocol.Version, "disconnected": true})
+}
+
+func integrationRateKey(r *http.Request) string {
+	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); forwarded != "" {
+		return forwarded
+	}
+	return r.RemoteAddr
+}
+
+func (s *Server) integrationSession(r *http.Request) (string, string, error) {
+	sessionID, ok := requestCookie(r, integrationSessionCookie)
+	if !ok {
+		return "", "", lifecycle.ErrIntegrationSessionNotFound
+	}
+	csrf := csrfCookie(r)
+	if err := validateCSRF(r, false); err != nil {
+		return "", "", err
+	}
+	return sessionID, csrf, nil
+}
+
+func (s *Server) apiIntegrationApplications(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	sessionID, csrf, err := s.integrationSession(r)
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	applications, receipt, err := s.integration.ListApplications(r.Context(), sessionID, csrf, s.now())
+	status := http.StatusOK
+	if err != nil {
+		status = integrationStatus(err)
+	}
+	s.writeJSON(w, status, protocol.AzureApplicationsResponse{APIVersion: protocol.Version, Applications: applications, Receipt: receipt, Error: integrationError(err)})
+}
+
+func (s *Server) apiIntegrationCreateApplication(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	sessionID, csrf, err := s.integrationSession(r)
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	var req protocol.AzureApplicationCreateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.writeIntegrationFailure(w, http.StatusBadRequest, "invalid application request")
+		return
+	}
+	application, receipt, err := s.integration.CreateApplication(r.Context(), sessionID, csrf, req, s.now())
+	status := http.StatusCreated
+	if err != nil {
+		status = integrationStatus(err)
+	}
+	s.writeJSON(w, status, protocol.AzureApplicationResponse{APIVersion: protocol.Version, Application: application, Receipt: &receipt, Error: integrationError(err)})
+}
+
+func (s *Server) apiIntegrationCreateSecret(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	sessionID, csrf, err := s.integrationSession(r)
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	var req protocol.AzureSecretCreateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.writeIntegrationFailure(w, http.StatusBadRequest, "invalid secret request")
+		return
+	}
+	secret, receipt, err := s.integration.CreateSecret(r.Context(), sessionID, csrf, req, s.now())
+	status := http.StatusCreated
+	if err != nil {
+		status = integrationStatus(err)
+	}
+	s.writeJSON(w, status, protocol.AzureSecretResponse{APIVersion: protocol.Version, Secret: secret, Receipt: receipt, Error: integrationError(err)})
+}
+
+func (s *Server) apiIntegrationReadSecret(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	sessionID, csrf, err := s.integrationSession(r)
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	var req protocol.AzureSecretReadRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.writeIntegrationFailure(w, http.StatusBadRequest, "invalid secret read request")
+		return
+	}
+	secret, receipt, err := s.integration.ReadSecret(r.Context(), sessionID, csrf, req, s.now())
+	status := http.StatusOK
+	if err != nil {
+		status = integrationStatus(err)
+	}
+	s.writeJSON(w, status, protocol.AzureSecretReadResponse{APIVersion: protocol.Version, Secret: secret, Receipt: receipt, Error: integrationError(err)})
+}
+
+func (s *Server) apiIntegrationInvalidateSecret(w http.ResponseWriter, r *http.Request) {
+	if s.integration == nil {
+		s.writeIntegrationFailure(w, http.StatusNotImplemented, "interactive Azure integration is not enabled")
+		return
+	}
+	if err := validateCSRF(r, true); err != nil {
+		s.writeIntegrationFailure(w, http.StatusForbidden, err.Error())
+		return
+	}
+	sessionID, csrf, err := s.integrationSession(r)
+	if err != nil {
+		s.writeIntegrationFailure(w, integrationStatus(err), err.Error())
+		return
+	}
+	var req protocol.AzureSecretInvalidateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.writeIntegrationFailure(w, http.StatusBadRequest, "invalid secret invalidation request")
+		return
+	}
+	credential, receipt, err := s.integration.InvalidateSecret(r.Context(), sessionID, csrf, req, s.now())
+	status := http.StatusOK
+	if err != nil {
+		status = integrationStatus(err)
+	}
+	s.writeJSON(w, status, protocol.AzureSecretInvalidateResponse{APIVersion: protocol.Version, Credential: credential, Receipt: receipt, Error: integrationError(err)})
 }
 
 func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
@@ -293,11 +538,139 @@ func (s *Server) apiRetire(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", protocol.ContentType)
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		s.logger.Printf("encode protocol payload: %v", err)
 	}
 }
+
+const (
+	csrfCookieName           = "mutandae_csrf"
+	integrationSessionCookie = "mutandae_integration"
+)
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func ensureCSRFCookie(w http.ResponseWriter, r *http.Request) string {
+	if value := csrfCookie(r); value != "" {
+		return value
+	}
+	value := randomToken()
+	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: value, Path: "/", HttpOnly: false, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode, MaxAge: 1800})
+	return value
+}
+
+func csrfCookie(r *http.Request) string {
+	cookie, err := r.Cookie(csrfCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func validateCSRF(r *http.Request, requireHeader bool) error {
+	cookie := csrfCookie(r)
+	if cookie == "" {
+		return lifecycle.ErrIntegrationCSRF
+	}
+	if requireHeader && !secureStringEqual(cookie, r.Header.Get("X-Mutandae-CSRF")) {
+		return lifecycle.ErrIntegrationCSRF
+	}
+	return nil
+}
+
+func secureStringEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var mismatch byte
+	for i := range a {
+		mismatch |= a[i] ^ b[i]
+	}
+	return mismatch == 0
+}
+
+func randomToken() string {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return hex.EncodeToString([]byte(time.Now().UTC().String()))
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func requestIsSecure(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+func setCookie(w http.ResponseWriter, r *http.Request, name, value string, httpOnly bool) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: httpOnly, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode, MaxAge: 1800})
+}
+
+func clearCookie(w http.ResponseWriter, r *http.Request, name string, httpOnly bool) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", HttpOnly: httpOnly, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
+}
+
+func requestCookie(r *http.Request, name string) (string, bool) {
+	cookie, err := r.Cookie(name)
+	if err != nil || cookie.Value == "" {
+		return "", false
+	}
+	return cookie.Value, true
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any) error {
+	if r.Body == nil {
+		return errors.New("request body is required")
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("request body must contain one JSON object")
+	}
+	return nil
+}
+
+func integrationStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	switch {
+	case errors.Is(err, lifecycle.ErrIntegrationSessionNotFound):
+		return http.StatusUnauthorized
+	case errors.Is(err, lifecycle.ErrIntegrationCSRF):
+		return http.StatusForbidden
+	case errors.Is(err, lifecycle.ErrIntegrationRateLimited):
+		return http.StatusTooManyRequests
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+func integrationError(err error) *protocol.Error {
+	if err == nil {
+		return nil
+	}
+	return ptr(protocol.NewError(protocol.ErrCodeProviderFailure, err.Error()))
+}
+
+func (s *Server) writeIntegrationFailure(w http.ResponseWriter, status int, message string) {
+	s.writeJSON(w, status, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, message)))
+}
+
+func ptr[T any](value T) *T { return &value }
 
 // writeError writes a browser-readable error for the HTML actions, mapping
 // lifecycle errors onto appropriate HTTP status codes.
@@ -352,6 +725,12 @@ func (s *Server) dashboardView() dashboardView {
 		}
 	}
 	return view
+}
+
+type configurationPageView struct {
+	protocol.Configuration
+	IntegrationEnabled bool
+	Requirements       protocol.AzureIntegrationRequirements
 }
 
 type dashboardView struct {

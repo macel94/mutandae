@@ -35,13 +35,15 @@ func (p Public) Configuration() protocol.Configuration {
 		provider = "azure-entra (simulated)"
 	}
 	features := []string{
-		"Azure/Entra simulator",
+		"Azure/Entra simulator for the public lifecycle inventory",
 		"Protocol v1",
-		"Synthetic data only",
-		"Read-only configuration",
+		"Optional ephemeral Azure Graph integration",
+		"Graph mutations constrained by Application.ReadWrite.OwnedBy",
+		"Customer credentials never persisted by Mutandae",
+		"Read-only deployment configuration",
 	}
 	if persistence == "redis" {
-		features = append(features, "Redis snapshot persistence", "Redis pub/sub change propagation")
+		features = append(features, "Redis snapshot persistence", "Redis pub/sub change propagation", "Redacted integration event receipts")
 	} else {
 		features = append(features, "Process-local demo state")
 	}

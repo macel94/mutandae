@@ -78,7 +78,7 @@ See [Brand Decisions](docs/brand-decisions.md).
 │   └── workflows/ci.yml       # Test, build, and GHCR publish pipeline
 ├── cmd/mutandae/              # Go application entrypoint (composition root)
 ├── pkg/protocol/              # μTandae Protocol v1: schemas, envelopes, validation
-├── internal/provider/         # Simulated azure-entra provider adapter
+├── internal/provider/         # Simulated + optional real Azure adapters
 ├── internal/lifecycle/        # Control-plane domain store + adapter boundary
 ├── internal/web/              # HTTP handlers, templates, CSS, protocol JSON API
 ├── deploy/k3s/                # Later-stage Kubernetes deployment baseline
@@ -86,7 +86,8 @@ See [Brand Decisions](docs/brand-decisions.md).
 ├── go.mod
 └── docs/
     ├── protocol.md            # μTandae Protocol v1 specification
-    ├── azure-demo.md          # Azure-first demo run guide
+    ├── azure-demo.md          # Synthetic Azure-first demo run guide
+    ├── azure-integration.md    # Optional real-tenant + Key Vault runbook
     ├── hosted-demo-gitops.md   # Hosted preview/live Redis + GitOps runbook
     ├── brand-decisions.md
     ├── implementation.md
@@ -105,8 +106,11 @@ You can test the hosted user experience at:
 
 The demo starts from Azure: a simulated Entra ID tenant exposes its application
 registrations, the control plane discovers and governs them over the μTandae
-Protocol, and the frontend renders the lifecycle. It is synthetic and does not
-accept real Azure credentials.
+Protocol, and the frontend renders the lifecycle. The Configuration page also
+offers an optional, ten-minute real-tenant path using exactly the Graph
+`Application.ReadWrite.OwnedBy` permission. Read
+[docs/azure-integration.md](docs/azure-integration.md) first; after a real-tenant
+trial, invalidate the temporary client credential and remove its consent.
 
 For local development:
 
@@ -121,8 +125,9 @@ Set `REDIS_URL` to use the temporary Redis-backed snapshot/pub-sub store; leave
 it unset for process-local development. Set `MUTANDAE_ENVIRONMENT=preview` or
 `live` to isolate Redis key prefixes.
 
-See [docs/azure-demo.md](docs/azure-demo.md) for the walkthrough and every
-protocol endpoint. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
+See [docs/azure-demo.md](docs/azure-demo.md) for the synthetic walkthrough and
+protocol endpoints. See [docs/azure-integration.md](docs/azure-integration.md)
+for the optional real-tenant flow, vault prerequisites, and cleanup procedure. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
 for the replicable hosted deployment. See [docs/protocol.md](docs/protocol.md)
 for the protocol specification and the machine-readable
 [`pkg/protocol/schema/mutandae.v1.json`](pkg/protocol/schema/mutandae.v1.json)

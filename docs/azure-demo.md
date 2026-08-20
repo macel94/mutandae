@@ -2,7 +2,7 @@
 
 The Mutandae demo starts from a simulated Azure / Entra ID tenant. Its application registrations are discovered by the `azure-entra` provider adapter and adopted into governance by the Mutandae control plane over the μTandae Protocol. The browser dashboard and the versioned JSON API then expose the same governed identities, lifecycle transitions, and audit evidence.
 
-This is a simulated Azure/Entra tenant, not a connection to a real Azure tenant. No Azure credentials or Azure service is required. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe, read-only runtime contract; it never accepts credentials.
+The lifecycle inventory is a simulated Azure/Entra tenant and does not require Azure credentials. The optional real-tenant workflow is documented in [azure-integration.md](azure-integration.md) and is isolated in an expiring in-memory session. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe runtime contract and, only when ready, the explicitly opt-in integration panel.
 
 ## Run it
 
@@ -87,12 +87,14 @@ The control-plane list is ordered by expiry ascending, so the initial API list s
 
 ## Configuration page
 
-`GET /configuration` is a public, read-only explanation of the current demo
+`GET /configuration` is a public, read-only explanation of the deployment
 contract. `GET /api/v1/configuration` returns the same safe information as a
-versioned protocol envelope. Neither endpoint accepts mutation requests. The
-page intentionally does not provide Azure connection fields, credentials,
-webhooks, arbitrary URLs, secret reveal/copy actions, or a test-connection
-button.
+versioned protocol envelope. The runtime configuration endpoints do not accept
+mutation requests. The page's separate optional integration panel accepts a
+real tenant ID, client ID, and temporary client password only over a CSRF-
+protected POST; see [azure-integration.md](azure-integration.md) for the
+permission, vault, session, and cleanup rules. The integration never puts
+credentials into Redis or lifecycle snapshots.
 
 ## HTML dashboard routes
 

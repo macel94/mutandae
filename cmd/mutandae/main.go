@@ -48,9 +48,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialise control plane: %v", err)
 	}
+	var integration lifecycle.IntegrationService
+	var events lifecycle.EventPublisher
+	if redisClient != nil {
+		events, err = lifecycle.NewRedisEventPublisher(redisClient, redisPrefix(), 24*time.Hour)
+		if err != nil {
+			log.Fatalf("create integration event publisher: %v", err)
+		}
+	} else {
+		events = &lifecycle.MemoryEventPublisher{}
+	}
+	integration, err = lifecycle.NewIntegrationManager(events, nil, now, 10*time.Minute)
+	if err != nil {
+		log.Fatalf("create Azure integration manager: %v", err)
+	}
 
 	handler, err := web.NewServer(web.Dependencies{
-		Lifecycle: store,
+		Lifecycle:   store,
+		Integration: integration,
 		Configuration: config.Public{
 			Environment: envString("MUTANDAE_ENVIRONMENT", "preview"),
 			Persistence: persistenceLabel(repository),
@@ -89,6 +104,9 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownContext); err != nil {
 		log.Printf("graceful shutdown: %v", err)
+	}
+	if integration != nil {
+		integration.Close()
 	}
 	if err := store.Close(); err != nil {
 		log.Printf("close lifecycle store: %v", err)

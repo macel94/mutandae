@@ -3,11 +3,14 @@
 // plane speaks the μTandae Protocol, and a provider adapter translates those
 // protocol operations into provider mechanics.
 //
-// This package ships one adapter, azure-entra, that fakes a Microsoft Entra ID
-// tenant's application registrations well enough to model meaningful lifecycle
-// and audit outcomes: discovery, rotation with provider evidence (new key id,
-// credential fingerprint, verified expiry), and retirement. It deliberately
-// contains no production Azure SDKs, credentials, or endpoints.
+// This package ships the public azure-entra simulator plus an optional
+// standard-library real Azure client for the interactive Configuration panel.
+// The real client uses Microsoft Graph client credentials and an existing Key
+// Vault through short-lived process-local sessions; it never persists
+// credentials or tokens and enforces Graph's Application.ReadWrite.OwnedBy
+// ownership boundary before mutations. The simulator fakes a Microsoft Entra
+// tenant's registrations well enough to model discovery, rotation with
+// provider evidence, and retirement.
 //
 // The Simulator implements the Adapter interface defined by the consuming
 // control-plane package. It only depends on the public protocol, keeping the

@@ -146,6 +146,97 @@ type ConfigurationResponse struct {
 	Error         *Error        `json:"error,omitempty"`
 }
 
+// AzureIntegrationRequirementsResponse advertises the real-tenant permission
+// and vault prerequisites without revealing deployment secrets.
+type AzureIntegrationRequirementsResponse struct {
+	APIVersion   string                       `json:"api_version"`
+	Requirements AzureIntegrationRequirements `json:"requirements"`
+	Error        *Error                       `json:"error,omitempty"`
+}
+
+// AzureIntegrationResponse returns only redacted session metadata.
+type AzureIntegrationResponse struct {
+	APIVersion string                  `json:"api_version"`
+	Session    AzureIntegrationSession `json:"session"`
+	CSRFToken  string                  `json:"csrf_token,omitempty"`
+	Error      *Error                  `json:"error,omitempty"`
+}
+
+// AzureApplicationsResponse lists safe application metadata.
+type AzureApplicationsResponse struct {
+	APIVersion   string             `json:"api_version"`
+	Applications []AzureApplication `json:"applications"`
+	Receipt      *OperationReceipt  `json:"receipt,omitempty"`
+	Error        *Error             `json:"error,omitempty"`
+}
+
+// AzureApplicationResponse returns one application and a redacted operation
+// receipt.
+type AzureApplicationResponse struct {
+	APIVersion  string            `json:"api_version"`
+	Application AzureApplication  `json:"application"`
+	Receipt     *OperationReceipt `json:"receipt,omitempty"`
+	Error       *Error            `json:"error,omitempty"`
+}
+
+// AzureApplicationCreateRequest creates a new application owned by the
+// supplied calling client under Graph's Application.ReadWrite.OwnedBy model.
+type AzureApplicationCreateRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
+// AzureSecretCreateRequest asks Graph to generate a new client secret for an
+// application. SecretText is returned only in this operation's response.
+type AzureSecretCreateRequest struct {
+	ApplicationObjectID string    `json:"application_object_id"`
+	DisplayName         string    `json:"display_name"`
+	ExpiresAt           time.Time `json:"expires_at,omitempty"`
+	StoreInVault        bool      `json:"store_in_vault"`
+}
+
+// AzureSecretResponse returns one-time secret material only from an explicit
+// secret-creation operation.
+type AzureSecretResponse struct {
+	APIVersion string            `json:"api_version"`
+	Secret     AzureSecretResult `json:"secret"`
+	Receipt    OperationReceipt  `json:"receipt"`
+	Error      *Error            `json:"error,omitempty"`
+}
+
+// AzureSecretReadRequest retrieves a previously stored version from the
+// configured Key Vault. It never reads plaintext from Redis or Graph.
+type AzureSecretReadRequest struct {
+	ApplicationObjectID string `json:"application_object_id"`
+	KeyID               string `json:"key_id"`
+	Version             string `json:"version,omitempty"`
+}
+
+// AzureSecretInvalidateRequest revokes a Graph password credential. If a vault
+// reference is supplied, the vault version is disabled/deleted only when the
+// configured vault client has the corresponding permission.
+type AzureSecretInvalidateRequest struct {
+	ApplicationObjectID string `json:"application_object_id"`
+	KeyID               string `json:"key_id"`
+	Version             string `json:"version,omitempty"`
+}
+
+// AzureSecretReadResponse returns the one-time vault value to the authorized
+// interactive session and a redacted receipt.
+type AzureSecretReadResponse struct {
+	APIVersion string            `json:"api_version"`
+	Secret     AzureSecretResult `json:"secret"`
+	Receipt    OperationReceipt  `json:"receipt"`
+	Error      *Error            `json:"error,omitempty"`
+}
+
+// AzureSecretInvalidateResponse returns no secret material.
+type AzureSecretInvalidateResponse struct {
+	APIVersion string           `json:"api_version"`
+	Credential AzureCredential  `json:"credential"`
+	Receipt    OperationReceipt `json:"receipt"`
+	Error      *Error           `json:"error,omitempty"`
+}
+
 // ErrorResponse is the canonical failure document.
 type ErrorResponse struct {
 	APIVersion string `json:"api_version"`

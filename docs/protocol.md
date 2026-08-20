@@ -23,7 +23,7 @@ tags. A field marked `omitempty` is optional in the representation. A field
 without `omitempty` is emitted by the Go type's JSON representation even when
 its Go value is the zero value. These wire-level tags are distinct from the
 semantic requirements enforced by `ValidateIdentity`, `ValidateEvent`, and
-`ValidateRotationRun` (see [Conformance rules](#8-conformance-rules)).
+`ValidateRotationRun` (see [Conformance rules](#9-conformance-rules)).
 
 Every response envelope defined below has an `api_version` field. The request
 structs in this version do not define an `api_version` field. A conforming
@@ -757,7 +757,94 @@ as string key/value pairs.
 `Version` and `error` set to `e`. `NewError(code, message)` creates an `Error`
 with the supplied `code` and `message`, leaving `details` unset.
 
-## 8. Conformance rules
+## 8. Interactive Azure integration extension
+
+Protocol v1 also defines an optional, explicitly interactive Azure / Entra
+extension. It is not part of the public synthetic lifecycle snapshot. A server
+may advertise it through discovery and `GET /api/v1/integration/requirements`.
+
+### Permission contract
+
+The required Microsoft Graph application permission is exactly:
+
+```text
+Application.ReadWrite.OwnedBy
+```
+
+This allows the supplied client application to list application metadata and to
+create or mutate applications, service principals, and password credentials only
+when Microsoft Graph considers the target application owned by that calling
+client. The create operation assigns the creating principal as owner in the
+supported application-permission flow. The server must not accept an owner ID
+from a browser as proof of ownership; Graph is authoritative.
+
+The interactive server supports:
+
+- connect using `tenant_id`, `client_id`, and a temporary `client_secret`;
+- list safe application metadata;
+- create applications owned by the calling client;
+- add one-time client secrets with expiry metadata;
+- store generated plaintext in an existing Azure Key Vault, optionally;
+- retrieve an exact versioned vault secret through an expiring session; and
+- invalidate the Graph password credential through `removePassword`, then
+  disable the corresponding vault version when a vault is configured.
+
+The client secret is write-only in the protocol request. It must never occur in
+`MachineIdentity`, `Snapshot`, `LifecycleEvent`, `AzureIntegrationEvent`, Redis
+payloads, logs, or a normal response. Microsoft Graph returns generated
+`secretText` only from `addPassword`; it cannot be read later from Graph.
+
+### Optional Key Vault contract
+
+Vault integration requires an existing HTTPS `*.vault.azure.net` endpoint and
+separate Key Vault data-plane permission. `Application.ReadWrite.OwnedBy` does
+not grant Key Vault access and cannot create vault role assignments. The
+recommended roles are:
+
+- `Key Vault Secrets Officer` for creating/updating the generated secret;
+- `Key Vault Secrets User` for read-only retrieval; or
+- `Key Vault Secrets Officer` when the same client must both write and read.
+
+Mutandae stores a deterministic secret name, version, expiry tag, application
+object ID, credential key ID, and optional owner object ID metadata. Azure RBAC
+is the actual authorization boundary. A client-credential token authenticates
+an application, not a human, so a form field containing “owners” cannot
+truthfully guarantee that only those humans can read a secret. Human owner-only
+retrieval requires delegated Entra authentication or an equivalent Azure RBAC
+setup outside this demo. The UI calls this prerequisite out explicitly.
+
+### Session and event guarantees
+
+A successful connect creates an in-memory session with an opaque HttpOnly
+cookie, a separate CSRF token, server-derived connection throttling, and a
+maximum ten-minute lifetime. Disconnect, expiry, and process shutdown clear the
+provider client and its credentials. Redis never stores the session.
+
+Each create/read/invalidate operation gets a correlation ID and a redacted
+`OperationReceipt`. With Redis enabled, the receipt is written with a short TTL
+and its pub/sub notification is published in the same Redis `MULTI/EXEC`
+transaction. This is atomic within Redis, not a distributed transaction with
+Azure. If Azure succeeds but Redis publication fails, the response reports
+`event_published: false`; it must not claim an atomic Azure-plus-Redis commit.
+
+### Interactive resources
+
+| Method | Path | Envelope / behavior |
+| --- | --- | --- |
+| `GET` | `/api/v1/integration/requirements` | Required Graph permission, vault roles, warnings. |
+| `POST` | `/api/v1/integration/connect` | Accepts write-only credentials; returns redacted session metadata and CSRF token. |
+| `GET` | `/api/v1/integration/session` | Returns redacted session metadata. |
+| `POST` | `/api/v1/integration/disconnect` | Clears the in-memory provider session. |
+| `GET` | `/api/v1/integration/applications` | Lists safe application metadata and redacted credentials. |
+| `POST` | `/api/v1/integration/applications` | Creates an owned application. |
+| `POST` | `/api/v1/integration/secrets` | Adds a Graph password; returns plaintext once unless stored in Key Vault. |
+| `POST` | `/api/v1/integration/secrets/read` | Reads the configured Key Vault value for the authorized session; accepts optional `version`. |
+| `POST` | `/api/v1/integration/secrets/invalidate` | Calls Graph `removePassword` and disables the current vault version when possible; returns no plaintext. |
+
+Every mutating route requires the CSRF cookie/header pair. Interactive
+responses use `Cache-Control: no-store` and security headers.
+
+## 9. Conformance rules
 
 The package exposes the sentinel:
 

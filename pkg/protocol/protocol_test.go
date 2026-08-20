@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -202,5 +203,21 @@ func TestFailureHelper(t *testing.T) {
 	resp := Failure(NewError(ErrCodeInvalidTransition, "boom"))
 	if resp.APIVersion != Version || resp.Error.Code != ErrCodeInvalidTransition {
 		t.Fatalf("wrong failure envelope: %+v", resp)
+	}
+}
+
+func TestInteractiveProtocolNeverPlacesSecretsInRedactedObjects(t *testing.T) {
+	secret := "one-time-secret-value"
+	event := AzureIntegrationEvent{ID: "evt", Type: string(EventSecretCreated), CorrelationID: "op", Outcome: OutcomeSuccess, Details: map[string]string{"key_id": "key"}}
+	payload, err := json.Marshal(OperationReceipt{ID: "receipt", CorrelationID: "op", EventPublished: true, Event: event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), secret) {
+		t.Fatal("redacted receipt contains secret material")
+	}
+	result, err := json.Marshal(AzureSecretResult{SecretText: secret, OneTime: true})
+	if err != nil || !strings.Contains(string(result), secret) {
+		t.Fatalf("explicit secret result = %s, err=%v", result, err)
 	}
 }

@@ -6,7 +6,7 @@ The complete native-production delivery, troubleshooting history, attestation
 compatibility findings, and final verification are documented in
 [`docs/native-production-delivery.md`](native-production-delivery.md).
 
-This repository now contains a runnable Azure-first vertical slice: a versioned μTandae Protocol in `pkg/protocol`, a simulated Azure/Entra ID provider adapter in `internal/provider`, a control-plane store in `internal/lifecycle`, and the open-source frontend plus a protocol JSON API in `internal/web`.
+This repository now contains a runnable Azure-first vertical slice: a versioned μTandae Protocol in `pkg/protocol`, a simulated Azure/Entra ID adapter plus an optional real Microsoft Graph/Key Vault adapter in `internal/provider`, an in-memory control-plane store in `internal/lifecycle`, and the open-source frontend plus protocol JSON APIs in `internal/web`.
 
 ## Product name and pronunciation
 
@@ -22,7 +22,7 @@ The backend uses Go 1.24, `net/http`, `html/template`, `embed`, and the standard
 - server-rendered HTML keeps the public control-plane contract visible;
 - `html/template` escapes interpolated values by default;
 - the same binary serves HTML, fragments, CSS, health checks, and a small JSON inventory endpoint;
-- the in-memory simulator makes the demo deterministic and keeps provider credentials out of the public layer;
+- the in-memory simulator makes the public lifecycle deterministic; the optional real-provider path keeps credentials in a short-lived process-local session and never in the public layer, Redis, or lifecycle snapshots;
 - the web package defines a small consumer-side `LifecycleService` interface instead of depending on the concrete store;
 - `Clock` and `Logger` are injected as dependencies, with concrete wiring kept in `cmd/mutandae` as the composition root;
 - constructors validate required dependencies and tests use fixed clocks plus fake services, avoiding sleeps and wall-clock assertions.
@@ -62,10 +62,12 @@ durable event log.
 
 Redis configuration is fail-closed: if `REDIS_URL` is configured but cannot be
 parsed or pinged, the process does not silently fall back to in-memory state.
-The public page at `/configuration` and protocol endpoint
-`/api/v1/configuration` expose only safe labels such as environment, provider,
-persistence mode, protocol version, and capabilities. They never expose Redis
-URLs, passwords, tenant identifiers, or credentials and are read-only.
+The public deployment configuration page and `/api/v1/configuration` endpoint
+expose only safe labels such as environment, provider, persistence mode,
+protocol version, and capabilities. They never expose Redis URLs, passwords,
+full tenant identifiers, or credentials. The separate optional integration
+panel accepts real-tenant credentials only through a CSRF-protected POST and
+holds them in an expiring in-memory session; see [azure-integration.md](azure-integration.md).
 
 This is suitable for a snappy evaluator demo, not a final durable data plane.
 PostgreSQL remains the planned advanced repository backend: it should implement
@@ -76,11 +78,13 @@ It is intentionally not provisioned by the current GitOps change.
 ### Provider adapter boundary
 
 `internal/lifecycle` defines a small consumer-side `Adapter` interface
-(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider`
-ships the public demo's **simulated azure-entra adapter**: it presents a tenant,
-application object ids, and credential evidence (key id, fingerprint, location),
-without any Azure SDK, credentials, or service endpoints. Production renewals
-implement the same boundary privately.
+(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider` ships both the public demo's **simulated azure-entra
+adapter** and a standard-library real Azure client for the interactive path.
+The real client uses Microsoft Graph client credentials, enforces
+`Application.ReadWrite.OwnedBy` through Graph ownership checks, and optionally
+writes/reads generated values through an existing Azure Key Vault. It never
+returns client secrets or Graph tokens from a provider interface, and all real
+sessions are process-local and TTL-bounded.
 
 ### Control-plane store
 
@@ -166,7 +170,7 @@ Before applying it to the cluster:
 2. Use the generated `sha-...` tag and digest from `deploy/k3s/kustomization.yaml`.
 3. Let the private `belacca-gitops` repository own the cluster-specific Ingress, TLS, Flux source, and admission policy configuration.
 4. Replace the in-memory store with persistence before treating the deployment as durable.
-5. Add the private provider adapter and secret-delivery boundary separately; do not put credentials in this demo manifest.
+5. The optional real-tenant adapter is enabled only when Redis event publishing is wired; it does not require deployment credentials. Allow reviewed outbound TCP/443 in the owning GitOps repository before enabling it in a cluster. Follow [azure-integration.md](azure-integration.md) and invalidate temporary client credentials after every trial.
 
 ```sh
 kubectl kustomize deploy/k3s
