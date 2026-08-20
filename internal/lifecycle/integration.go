@@ -58,6 +58,7 @@ type integrationManager struct {
 	now            func() time.Time
 	ttl            time.Duration
 	maxConnections int
+	maxSessions    int
 	connections    map[string][]time.Time
 	stopCleanup    chan struct{}
 	cleanupDone    chan struct{}
@@ -80,7 +81,7 @@ func NewIntegrationManager(publisher EventPublisher, httpClient *http.Client, no
 	if ttl <= 0 || ttl > 30*time.Minute {
 		ttl = 10 * time.Minute
 	}
-	m := &integrationManager{sessions: make(map[string]*IntegrationSession), publisher: publisher, httpClient: httpClient, now: now, ttl: ttl, maxConnections: 5, connections: make(map[string][]time.Time), stopCleanup: make(chan struct{}), cleanupDone: make(chan struct{})}
+	m := &integrationManager{sessions: make(map[string]*IntegrationSession), publisher: publisher, httpClient: httpClient, now: now, ttl: ttl, maxConnections: 5, maxSessions: 50, connections: make(map[string][]time.Time), stopCleanup: make(chan struct{}), cleanupDone: make(chan struct{})}
 	go m.cleanupLoop()
 	return m, nil
 }
@@ -140,6 +141,11 @@ func (m *integrationManager) Connect(ctx context.Context, req protocol.AzureInte
 	}
 	session := &IntegrationSession{ID: id, CSRF: sessionCSRF, ExpiresAt: now.Add(m.ttl), Client: client, Vault: req.Vault, VaultRefs: make(map[string]protocol.VaultReference), Public: public}
 	m.mu.Lock()
+	if len(m.sessions) >= m.maxSessions {
+		m.mu.Unlock()
+		client.Close()
+		return protocol.AzureIntegrationSession{}, "", ErrIntegrationRateLimited
+	}
 	m.sessions[id] = session
 	m.mu.Unlock()
 	return public, sessionCSRF, nil
@@ -358,6 +364,20 @@ func (m *integrationManager) InvalidateSecret(ctx context.Context, sessionID, cs
 	return credential, receipt, err
 }
 
+func validateIntegrationEvent(event protocol.AzureIntegrationEvent) error {
+	for key, value := range event.Details {
+		lowerKey := strings.ToLower(key)
+		if strings.Contains(lowerKey, "secret_text") || strings.Contains(lowerKey, "client_secret") || strings.Contains(lowerKey, "password") || strings.Contains(lowerKey, "access_token") || lowerKey == "token" {
+			return errors.New("integration event contains a forbidden secret-bearing detail")
+		}
+		lowerValue := strings.ToLower(value)
+		if strings.Contains(lowerValue, "bearer ") {
+			return errors.New("integration event contains a bearer token")
+		}
+	}
+	return nil
+}
+
 func vaultRefKey(applicationObjectID, keyID string) string {
 	return applicationObjectID + ":" + keyID
 }
@@ -373,6 +393,9 @@ func (m *integrationManager) receipt(ctx context.Context, eventType protocol.Eve
 	}
 	event := protocol.AzureIntegrationEvent{ID: id, Type: string(eventType), CorrelationID: correlation, At: now.UTC(), Outcome: protocol.OutcomeSuccess, Provider: "azure-entra", ApplicationID: applicationID, Details: details}
 	published := true
+	if err := validateIntegrationEvent(event); err != nil {
+		return protocol.OperationReceipt{}, err
+	}
 	if err := m.publisher.Publish(ctx, event); err != nil {
 		published = false
 		return protocol.OperationReceipt{ID: id, CorrelationID: correlation, EventPublished: false, Event: event}, fmt.Errorf("Azure operation succeeded but redacted event publication failed: %w", err)

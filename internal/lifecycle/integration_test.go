@@ -57,6 +57,12 @@ func TestIntegrationManagerSessionSecurityAndRedactedEvents(t *testing.T) {
 			t.Fatalf("event leaked credential material: %s", encoded)
 		}
 	}
+	if err := validateIntegrationEvent(protocol.AzureIntegrationEvent{Details: map[string]string{"vault_secret_name": "mutandae-app-key"}}); err != nil {
+		t.Fatalf("safe vault reference rejected: %v", err)
+	}
+	if err := validateIntegrationEvent(protocol.AzureIntegrationEvent{Details: map[string]string{"secret_text": "never"}}); err == nil {
+		t.Fatal("secret_text detail was accepted")
+	}
 }
 
 type rewriteTransport struct {
