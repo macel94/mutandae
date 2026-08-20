@@ -48,6 +48,31 @@ message envelopes, ISO-8601 durations, the canonical state machine, and
 conformance validation. It never encodes provider mechanics or credentials. See
 [docs/protocol.md](protocol.md).
 
+### Temporary Redis persistence and pub/sub
+
+The public hosted demo uses Redis as a deliberately temporary persistence layer
+for speed and simple cross-instance propagation. Set `REDIS_URL` to enable it;
+when unset, local development remains in-memory. `MUTANDAE_ENVIRONMENT` selects
+the environment and becomes the Redis key prefix (`mutandae:preview` or
+`mutandae:live`), so preview and live share one Redis instance without sharing
+snapshots. The repository stores protocol-native JSON snapshots and publishes a
+small invalidation message on the matching `<prefix>:changes` channel. Every
+instance reloads the snapshot after a notification; pub/sub is not treated as a
+durable event log.
+
+Redis configuration is fail-closed: if `REDIS_URL` is configured but cannot be
+parsed or pinged, the process does not silently fall back to in-memory state.
+The public page at `/configuration` and protocol endpoint
+`/api/v1/configuration` expose only safe labels such as environment, provider,
+persistence mode, protocol version, and capabilities. They never expose Redis
+URLs, passwords, tenant identifiers, or credentials and are read-only.
+
+This is suitable for a snappy evaluator demo, not a final durable data plane.
+PostgreSQL remains the planned advanced repository backend: it should implement
+the same `lifecycle.Repository` boundary with transactional migrations,
+concurrent lifecycle locking, immutable events, and reconciliation handling.
+It is intentionally not provisioned by the current GitOps change.
+
 ### Provider adapter boundary
 
 `internal/lifecycle` defines a small consumer-side `Adapter` interface
@@ -101,10 +126,12 @@ Useful endpoints:
 |---|---|---|
 | `GET` | `/` | Full dashboard |
 | `GET` | `/partials/identities` | HTMX inventory fragment |
+| `GET` | `/configuration` | Safe, read-only demo configuration page |
 | `GET` | `/identities/{id}/events` | HTMX audit-trail fragment |
 | `POST` | `/identities/{id}/rotate` | Rotation + refreshed inventory |
 | `POST` | `/identities/{id}/retire` | Retire (explicit confirm) + refreshed inventory |
 | `GET` | `/api/v1/` | Protocol discovery index |
+| `GET` | `/api/v1/configuration` | Safe read-only configuration envelope |
 | `GET` | `/api/v1/identities` | Protocol list envelope |
 | `GET` | `/api/v1/identities/{id}` | Protocol inspect envelope |
 | `POST` | `/api/v1/identities` | Protocol register envelope |

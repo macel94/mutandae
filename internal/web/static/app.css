@@ -158,6 +158,21 @@ kbd { position: absolute; right: 8px; padding: 1px 5px; border: 1px solid var(--
 .timeline-body small { color: var(--ink-faint); font-size: 9px; }
 .timeline-body small span { padding: 0 3px; }
 
+.configuration-page { max-width: 1040px; margin: 0 auto; }
+.configuration-hero { min-height: 280px; }
+.config-warning { margin: 0 0 24px; padding: 15px 18px; border: 1px solid rgba(190, 67, 47, .35); border-left: 4px solid var(--cinnabar); background: rgba(190, 67, 47, .06); color: var(--ink-soft); font-size: 12px; line-height: 1.65; }
+.config-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.config-card { padding: 25px; }
+.config-card h2 { margin: 5px 0 21px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
+.config-list { margin: 0; }
+.config-list div { display: flex; justify-content: space-between; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.config-list dt { color: var(--ink-faint); font-size: 11px; }
+.config-list dd { margin: 0; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; text-align: right; }
+.config-list code, .config-next code { color: var(--teal); font-size: 10px; }
+.feature-list { display: grid; gap: 12px; margin: 0 0 22px; padding: 0; list-style: none; color: var(--ink-soft); font-size: 12px; }
+.feature-list li { display: flex; align-items: center; gap: 9px; }
+.config-next { margin-top: 18px; }
+
 .footer { display: flex; justify-content: space-between; padding: 25px 2px 0; color: var(--ink-faint); font-size: 10px; }
 .footer strong { color: var(--teal); font-weight: 700; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -193,5 +208,7 @@ kbd { position: absolute; right: 8px; padding: 1px 5px; border: 1px solid var(--
   .identity-table th:last-child, .identity-table td:last-child { padding-right: 16px; }
   .identity-table th:nth-child(2), .identity-table td:nth-child(2), .identity-table th:nth-child(3), .identity-table td:nth-child(3) { display: none; }
   .timeline, .identity-summary { margin-left: 16px; margin-right: 16px; padding-left: 0; padding-right: 0; }
+  .config-grid { grid-template-columns: 1fr; }
+  .config-card { padding: 18px; }
   .footer { display: block; line-height: 2; }
 }

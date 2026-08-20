@@ -87,6 +87,7 @@ See [Brand Decisions](docs/brand-decisions.md).
 └── docs/
     ├── protocol.md            # μTandae Protocol v1 specification
     ├── azure-demo.md          # Azure-first demo run guide
+    ├── hosted-demo-gitops.md   # Hosted preview/live Redis + GitOps runbook
     ├── brand-decisions.md
     ├── implementation.md
     ├── mvp-objectives.md
@@ -96,19 +97,35 @@ See [Brand Decisions](docs/brand-decisions.md).
 
 ## Run the demo (Azure-first)
 
+You can test the hosted user experience at:
+
+- **Live:** <https://mutandae.com>
+- **Preview/sandbox:** <https://preview.mutandae.com>
+- **Configuration:** append `/configuration` to either host
+
 The demo starts from Azure: a simulated Entra ID tenant exposes its application
 registrations, the control plane discovers and governs them over the μTandae
-Protocol, and the frontend renders the lifecycle.
+Protocol, and the frontend renders the lifecycle. It is synthetic and does not
+accept real Azure credentials.
+
+For local development:
 
 ```sh
 go run ./cmd/mutandae
 # open http://localhost:8080
 # protocol discovery: curl http://localhost:8080/api/v1/
+# safe runtime configuration: curl http://localhost:8080/api/v1/configuration
 ```
 
+Set `REDIS_URL` to use the temporary Redis-backed snapshot/pub-sub store; leave
+it unset for process-local development. Set `MUTANDAE_ENVIRONMENT=preview` or
+`live` to isolate Redis key prefixes.
+
 See [docs/azure-demo.md](docs/azure-demo.md) for the walkthrough and every
-protocol endpoint. See [docs/protocol.md](docs/protocol.md) for the protocol
-specification and the machine-readable [`pkg/protocol/schema/mutandae.v1.json`](pkg/protocol/schema/mutandae.v1.json)
+protocol endpoint. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
+for the replicable hosted deployment. See [docs/protocol.md](docs/protocol.md)
+for the protocol specification and the machine-readable
+[`pkg/protocol/schema/mutandae.v1.json`](pkg/protocol/schema/mutandae.v1.json)
 JSON Schema. See [Implementation Choices](docs/implementation.md) for the
 architecture, tests, container image, GHCR publishing, and future K3s path.
 

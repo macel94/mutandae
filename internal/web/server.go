@@ -36,6 +36,11 @@ type LifecycleService interface {
 	Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error)
 }
 
+// ConfigurationService supplies only the safe, read-only runtime view.
+type ConfigurationService interface {
+	Configuration() protocol.Configuration
+}
+
 // Clock makes time-dependent rendering and mutations deterministic in tests.
 type Clock func() time.Time
 
@@ -45,17 +50,19 @@ type Logger interface {
 }
 
 type Dependencies struct {
-	Lifecycle LifecycleService
-	Clock     Clock
-	Logger    Logger
+	Lifecycle     LifecycleService
+	Configuration ConfigurationService
+	Clock         Clock
+	Logger        Logger
 }
 
 type Server struct {
-	lifecycle LifecycleService
-	templates *template.Template
-	static    fs.FS
-	now       Clock
-	logger    Logger
+	lifecycle     LifecycleService
+	templates     *template.Template
+	static        fs.FS
+	now           Clock
+	logger        Logger
+	configuration ConfigurationService
 }
 
 var _ LifecycleService = (*lifecycle.Store)(nil)
@@ -71,6 +78,9 @@ func NewServer(deps Dependencies) (http.Handler, error) {
 func newServer(deps Dependencies) (*Server, error) {
 	if deps.Lifecycle == nil {
 		return nil, errors.New("lifecycle service is required")
+	}
+	if deps.Configuration == nil {
+		return nil, errors.New("configuration service is required")
 	}
 	if deps.Clock == nil {
 		return nil, errors.New("clock is required")
@@ -103,11 +113,12 @@ func newServer(deps Dependencies) (*Server, error) {
 	}
 
 	return &Server{
-		lifecycle: deps.Lifecycle,
-		templates: templates,
-		static:    static,
-		now:       deps.Clock,
-		logger:    deps.Logger,
+		lifecycle:     deps.Lifecycle,
+		configuration: deps.Configuration,
+		templates:     templates,
+		static:        static,
+		now:           deps.Clock,
+		logger:        deps.Logger,
 	}, nil
 }
 
@@ -115,12 +126,14 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	// Server-rendered frontend (HTMX + Alpine).
 	mux.HandleFunc("GET /{$}", s.dashboard)
+	mux.HandleFunc("GET /configuration", s.configurationPage)
 	mux.HandleFunc("GET /partials/identities", s.identityList)
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
 	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
 	// Protocol JSON API (versioned).
 	mux.HandleFunc("GET /api/v1/", s.apiRoot)
+	mux.HandleFunc("GET /api/v1/configuration", s.apiConfiguration)
 	mux.HandleFunc("GET /api/v1/identities", s.apiList)
 	mux.HandleFunc("POST /api/v1/identities", s.apiRegister)
 	mux.HandleFunc("GET /api/v1/identities/{id}", s.apiInspect)
@@ -135,6 +148,10 @@ func (s *Server) routes() http.Handler {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "index", s.dashboardView())
+}
+
+func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "configuration", s.configuration.Configuration())
 }
 
 func (s *Server) identityList(w http.ResponseWriter, r *http.Request) {
@@ -192,12 +209,20 @@ func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
 		Service:    "mutandae-control-plane",
 		MediaType:  protocol.MediaType,
 		Resources: []protocol.DiscoveryResource{
+			{Rel: "configuration", Method: http.MethodGet, HREF: "/api/v1/configuration", Envelope: "configuration"},
 			{Rel: "identities", Method: http.MethodGet, HREF: "/api/v1/identities", Envelope: "list"},
 			{Rel: "identity", Method: http.MethodGet, HREF: "/api/v1/identities/{id}", Envelope: "inspect"},
 			{Rel: "register", Method: http.MethodPost, HREF: "/api/v1/identities", Envelope: "register"},
 			{Rel: "rotate", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/rotations", Envelope: "rotate"},
 			{Rel: "retire", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/retire", Envelope: "retire"},
 		},
+	})
+}
+
+func (s *Server) apiConfiguration(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, protocol.ConfigurationResponse{
+		APIVersion:    protocol.Version,
+		Configuration: s.configuration.Configuration(),
 	})
 }
 

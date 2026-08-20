@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mutandae
+  name: mutandae-preview
   labels:
-    app.kubernetes.io/name: mutandae
+    app.kubernetes.io/name: mutandae-preview
     belacca.com/project: mutandae
-    belacca.com/stage: native-production
+    belacca.com/stage: preview
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: mutandae
+      app.kubernetes.io/name: mutandae-preview
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: mutandae
+        app.kubernetes.io/name: mutandae-preview
         belacca.com/project: mutandae
-        belacca.com/stage: native-production
+        belacca.com/stage: preview
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -36,9 +36,9 @@ spec:
             - name: PORT
               value: "8080"
             - name: MUTANDAE_ENVIRONMENT
-              value: live
+              value: preview
             - name: MUTANDAE_TENANT
-              value: mutandae-live-synthetic
+              value: mutandae-preview-synthetic
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:

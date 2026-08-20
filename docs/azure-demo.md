@@ -2,7 +2,7 @@
 
 The Mutandae demo starts from a simulated Azure / Entra ID tenant. Its application registrations are discovered by the `azure-entra` provider adapter and adopted into governance by the Mutandae control plane over the μTandae Protocol. The browser dashboard and the versioned JSON API then expose the same governed identities, lifecycle transitions, and audit evidence.
 
-This is an in-memory simulator, not a connection to a real Azure tenant. No Azure credentials, database, or Azure service is required. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Restarting the process recreates the seeded tenant and clears the control-plane store.
+This is a simulated Azure/Entra tenant, not a connection to a real Azure tenant. No Azure credentials or Azure service is required. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe, read-only runtime contract; it never accepts credentials.
 
 ## Run it
 
@@ -19,7 +19,14 @@ The command in `cmd/mutandae` is the composition root. It uses these environment
 | Variable | Default | Effect |
 |---|---|---|
 | `PORT` | `8080` | HTTP listening port. Values outside `1`–`65535` are ignored and fall back to `8080`. |
-| `MUTANDAE_TENANT` | `8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo` | Tenant ID reported by the simulated Azure / Entra ID adapter. |
+| `MUTANDAE_TENANT` | `8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo` | Synthetic tenant label reported by the simulated adapter. |
+| `MUTANDAE_ENVIRONMENT` | `preview` | Redis key-prefix environment and safe UI label. |
+| `REDIS_URL` | unset | Optional Redis URL. When set, startup fails closed if Redis cannot be parsed or pinged; when unset, local state is in-memory. |
+
+The hosted deployment keeps `MUTANDAE_ENVIRONMENT=preview` and
+`MUTANDAE_ENVIRONMENT=live` separate while using one Redis server. The Redis
+URL and password are GitOps-managed Secret data and never appear in the public
+configuration page.
 
 For example:
 
@@ -77,6 +84,15 @@ The simulator seeds four application registrations. `Expiry offset` is relative 
 | `legacy-reporting` | `production` | −3 days | `attention` | 90 |
 
 The control-plane list is ordered by expiry ascending, so the initial API list starts with `legacy-reporting`, then `payments-api`, `data-pipeline`, and `inventory-sync`. A successful rotation recalculates the governed expiry from the current time plus the identity's policy period and can change that order. A successful rotation also changes the simulated identity's health to `healthy`.
+
+## Configuration page
+
+`GET /configuration` is a public, read-only explanation of the current demo
+contract. `GET /api/v1/configuration` returns the same safe information as a
+versioned protocol envelope. Neither endpoint accepts mutation requests. The
+page intentionally does not provide Azure connection fields, credentials,
+webhooks, arbitrary URLs, secret reveal/copy actions, or a test-connection
+button.
 
 ## HTML dashboard routes
 

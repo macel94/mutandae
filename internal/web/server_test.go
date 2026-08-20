@@ -32,9 +32,10 @@ func testStore(t *testing.T) *lifecycle.Store {
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	server, err := newServer(Dependencies{
-		Lifecycle: testStore(t),
-		Clock:     func() time.Time { return testNow() },
-		Logger:    testLogger{},
+		Lifecycle:     testStore(t),
+		Configuration: testConfiguration{},
+		Clock:         func() time.Time { return testNow() },
+		Logger:        testLogger{},
 	})
 	if err != nil {
 		t.Fatalf("newServer() error = %v", err)
@@ -51,16 +52,29 @@ type testLogger struct{}
 
 func (testLogger) Printf(string, ...any) {}
 
+type testConfiguration struct{}
+
+func (testConfiguration) Configuration() protocol.Configuration {
+	return protocol.Configuration{
+		Service: "mutandae-control-plane", ProtocolVersion: protocol.Version,
+		MediaType: protocol.MediaType, Environment: "preview",
+		Provider: "azure-entra (simulated)", Persistence: "in-memory",
+		ReadOnly: true, Features: []string{"Synthetic data only"}, UpdatedAt: testNow(),
+	}
+}
+
 func TestNewServerRequiresDependencies(t *testing.T) {
 	valid := Dependencies{
-		Lifecycle: testStore(t),
-		Clock:     func() time.Time { return testNow() },
-		Logger:    testLogger{},
+		Lifecycle:     testStore(t),
+		Configuration: testConfiguration{},
+		Clock:         func() time.Time { return testNow() },
+		Logger:        testLogger{},
 	}
 	for name, deps := range map[string]Dependencies{
-		"lifecycle": {Clock: valid.Clock, Logger: valid.Logger},
-		"clock":     {Lifecycle: valid.Lifecycle, Logger: valid.Logger},
-		"logger":    {Lifecycle: valid.Lifecycle, Clock: valid.Clock},
+		"lifecycle":     {Configuration: valid.Configuration, Clock: valid.Clock, Logger: valid.Logger},
+		"configuration": {Lifecycle: valid.Lifecycle, Clock: valid.Clock, Logger: valid.Logger},
+		"clock":         {Lifecycle: valid.Lifecycle, Configuration: valid.Configuration, Logger: valid.Logger},
+		"logger":        {Lifecycle: valid.Lifecycle, Configuration: valid.Configuration, Clock: valid.Clock},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := newServer(deps); err == nil {
@@ -85,7 +99,7 @@ func TestHandlersUseInjectedLifecycleService(t *testing.T) {
 		}},
 		events: map[string][]protocol.LifecycleEvent{},
 	}
-	handler, err := NewServer(Dependencies{Lifecycle: fake, Clock: func() time.Time { return testNow() }, Logger: testLogger{}})
+	handler, err := NewServer(Dependencies{Lifecycle: fake, Configuration: testConfiguration{}, Clock: func() time.Time { return testNow() }, Logger: testLogger{}})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -97,6 +111,26 @@ func TestHandlersUseInjectedLifecycleService(t *testing.T) {
 	}
 	if fake.rotatedID != "fake-identity" {
 		t.Fatalf("Rotate() received %q, want fake-identity", fake.rotatedID)
+	}
+}
+
+func TestConfigurationPageAndProtocolEndpointAreSafe(t *testing.T) {
+	handler := testHandler(t)
+	for _, path := range []string{"/configuration", "/api/v1/configuration"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, recorder.Code)
+		}
+		body := recorder.Body.String()
+		if strings.Contains(body, "redis://") || strings.Contains(body, "REDIS_URL") || strings.Contains(body, "tenant-1") || strings.Contains(body, "client_secret") {
+			t.Fatalf("%s exposed forbidden runtime data: %s", path, body)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/configuration", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /configuration status = %d, want 405", recorder.Code)
 	}
 }
 

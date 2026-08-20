@@ -5,7 +5,9 @@ namespace: mutandae
 
 resources:
   - deployment.yaml
+  - deployment-preview.yaml
   - service.yaml
+  - service-preview.yaml
 
 images:
   - name: mutandae

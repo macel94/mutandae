@@ -1,0 +1,64 @@
+{{ define "configuration" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Mutandae public demo configuration">
+  <title>Mutandae · Demo configuration</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Mutandae home"><span class="brand-symbol">μ</span><span>Mutandae</span></a>
+      <nav class="topnav is-open">
+        <a href="/">Overview</a>
+        <a class="active" href="/configuration">Configuration</a>
+        <span class="environment-chip"><span class="status-dot"></span>{{ .Environment }}</span>
+      </nav>
+    </header>
+    <main class="configuration-page">
+      <section class="hero configuration-hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Public demo · read-only configuration <span class="eyebrow-line"></span></p>
+          <h1>See how this<br><em>demo is shaped.</em></h1>
+          <p class="hero-lede">This page describes the synthetic environment. It does not connect to Azure, accept credentials, or change runtime settings.</p>
+        </div>
+      </section>
+      <section class="config-warning" role="note">
+        <strong>Safe to explore.</strong> This deployment uses synthetic Azure/Entra data. No Azure tenant, client secret, certificate, access key, Redis password, or other secret material is accepted or shown here.
+      </section>
+      <section class="config-grid" aria-label="Demo configuration details">
+        <article class="panel config-card">
+          <p class="section-kicker">Runtime</p>
+          <h2>Environment contract</h2>
+          <dl class="config-list">
+            <div><dt>Environment</dt><dd>{{ .Environment }}</dd></div>
+            <div><dt>Provider</dt><dd>{{ .Provider }}</dd></div>
+            <div><dt>Persistence</dt><dd>{{ .Persistence }}</dd></div>
+            <div><dt>Protocol</dt><dd>{{ .ProtocolVersion }}</dd></div>
+            <div><dt>Media type</dt><dd><code>{{ .MediaType }}</code></dd></div>
+          </dl>
+        </article>
+        <article class="panel config-card">
+          <p class="section-kicker">Capabilities</p>
+          <h2>What is enabled</h2>
+          <ul class="feature-list">
+            {{ range .Features }}<li><span class="status-dot"></span>{{ . }}</li>{{ end }}
+          </ul>
+          <p class="muted">Configuration is intentionally read-only. Use the dashboard to explore lifecycle actions against demo data.</p>
+        </article>
+      </section>
+      <section class="panel config-card config-next">
+        <p class="section-kicker">Continue the walkthrough</p>
+        <h2>Try the protocol path</h2>
+        <p>Return to the dashboard, inspect <strong>payments-api</strong>, rotate it, and follow the correlated lifecycle events. The API discovery document is available at <code>/api/v1/</code>.</p>
+        <a class="button button-secondary" href="/">Open demo dashboard</a>
+      </section>
+    </main>
+    <footer class="footer"><span>μTandae Protocol v1 · synthetic demo</span><span>Read-only configuration · updated {{ .UpdatedAt.Format "Jan 02, 2006 · 15:04 MST" }}</span></footer>
+  </div>
+</body>
+</html>
+{{ end }}

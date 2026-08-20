@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -16,27 +17,53 @@ import (
 // Adapter. It is not durable or horizontally shared; it exists to make the
 // public demo runnable and testable without a database.
 type Store struct {
-	mu         sync.RWMutex
-	adapter    Adapter
-	identities map[string]protocol.MachineIdentity
-	events     map[string][]protocol.LifecycleEvent
-	runs       map[string][]protocol.RotationRun
-	nextEvent  int
-	nextRun    int
+	mu          sync.RWMutex
+	adapter     Adapter
+	repository  Repository
+	identities  map[string]protocol.MachineIdentity
+	events      map[string][]protocol.LifecycleEvent
+	runs        map[string][]protocol.RotationRun
+	nextEvent   int
+	nextRun     int
+	watchCancel context.CancelFunc
+	watchDone   chan struct{}
 }
 
-// NewStore constructs a control-plane store bound to the given provider adapter
-// and fans out the adapter's discovered identities through the registration
-// flow, so the demo genuinely "starts from the cloud".
+// NewStore constructs an in-memory control-plane store bound to the given
+// provider adapter. NewPersistentStore adds Redis-backed state and pub/sub.
 func NewStore(ctx context.Context, now time.Time, adapter Adapter) (*Store, error) {
+	return newStore(ctx, now, adapter, nil)
+}
+
+// NewPersistentStore restores an environment-scoped snapshot from repository.
+// On first boot, it discovers the provider seed once and persists that state.
+func NewPersistentStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository) (*Store, error) {
+	return newStore(ctx, now, adapter, repository)
+}
+
+func newStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository) (*Store, error) {
 	if adapter == nil {
 		return nil, ErrAdapterRequired
 	}
 	store := &Store{
 		adapter:    adapter,
+		repository: repository,
 		identities: make(map[string]protocol.MachineIdentity),
 		events:     make(map[string][]protocol.LifecycleEvent),
 		runs:       make(map[string][]protocol.RotationRun),
+	}
+	if repository != nil {
+		snapshot, err := repository.Load(ctx)
+		if err == nil {
+			store.restoreLocked(snapshot)
+			if err := store.startWatcher(); err != nil {
+				return nil, err
+			}
+			return store, nil
+		}
+		if !errors.Is(err, ErrNoSnapshot) {
+			return nil, err
+		}
 	}
 	discovered, err := adapter.Discover(ctx)
 	if err != nil {
@@ -44,6 +71,14 @@ func NewStore(ctx context.Context, now time.Time, adapter Adapter) (*Store, erro
 	}
 	for _, identity := range discovered {
 		if err := store.adopt(fixIdentity(identity), now); err != nil {
+			return nil, err
+		}
+	}
+	if repository != nil {
+		if err := repository.Save(ctx, store.snapshotLocked()); err != nil {
+			return nil, err
+		}
+		if err := store.startWatcher(); err != nil {
 			return nil, err
 		}
 	}
@@ -195,6 +230,9 @@ func (s *Store) Register(ctx context.Context, req protocol.RegisterRequest, now 
 		fmt.Sprintf("Registered %s into governance", identity.Name),
 		req.RequestedByOrDefault(), protocol.OutcomeSuccess, nil, "")
 
+	if err := s.persistLocked(ctx); err != nil {
+		return protocol.RegisterResponse{}, err
+	}
 	events := s.eventsSnapshotLocked(identity.ID)
 	return protocol.RegisterResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil
 }
@@ -284,6 +322,9 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		s.addEvent(identity.ID, now, protocol.EventRotationFailed,
 			"Rotation failed at the provider: "+adapterErr.Error(), protocol.ActorProviderAdapter,
 			protocol.OutcomeFailure, nil, runID)
+		if persistErr := s.persistLocked(ctx); persistErr != nil {
+			return protocol.RotateResponse{}, persistErr
+		}
 		return protocol.RotateResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
 	}
 
@@ -307,6 +348,9 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		"New credential verified against provider state", protocol.ActorProviderAdapter,
 		protocol.OutcomeSuccess,
 		map[string]string{"key_id": identity.Credential.KeyID, "fingerprint": identity.Credential.Fingerprint}, runID)
+	if err := s.persistLocked(ctx); err != nil {
+		return protocol.RotateResponse{}, err
+	}
 
 	events := s.eventsSnapshotLocked(identity.ID)
 	return protocol.RotateResponse{
@@ -351,6 +395,9 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 	s.identities[identity.ID] = identity
 	s.addEvent(identity.ID, now, protocol.EventIdentityRetired,
 		"Retired "+identity.Name+" ("+req.Reason+")", operator, protocol.OutcomeSuccess, nil, "")
+	if err := s.persistLocked(ctx); err != nil {
+		return protocol.RetireResponse{}, err
+	}
 
 	events := s.eventsSnapshotLocked(identity.ID)
 	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil

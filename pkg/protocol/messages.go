@@ -123,6 +123,29 @@ func (r RetireRequest) RequestedByOrDefault() string {
 	return ActorOperator
 }
 
+// Configuration is the safe, read-only runtime description exposed to demo
+// users. It deliberately excludes connection strings, credentials, provider
+// endpoints, and tenant identifiers.
+type Configuration struct {
+	Service         string    `json:"service"`
+	ProtocolVersion string    `json:"protocol_version"`
+	MediaType       string    `json:"media_type"`
+	Environment     string    `json:"environment"`
+	Provider        string    `json:"provider"`
+	Persistence     string    `json:"persistence"`
+	ReadOnly        bool      `json:"read_only"`
+	Features        []string  `json:"features"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// ConfigurationResponse is the versioned envelope for the safe configuration
+// view consumed by the frontend and evaluators.
+type ConfigurationResponse struct {
+	APIVersion   string        `json:"api_version"`
+	Configuration Configuration `json:"configuration"`
+	Error        *Error        `json:"error,omitempty"`
+}
+
 // ErrorResponse is the canonical failure document.
 type ErrorResponse struct {
 	APIVersion string `json:"api_version"`
