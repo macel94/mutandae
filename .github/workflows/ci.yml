@@ -8,10 +8,12 @@ on:
       - '.github/workflows/ci.yml'
       - 'cmd/**'
       - 'internal/**'
+      - 'pkg/**'
       - 'deploy/**'
       - 'Dockerfile'
       - '.dockerignore'
       - 'go.mod'
+      - 'go.sum'
       - 'scripts/**'
   pull_request:
     branches:
