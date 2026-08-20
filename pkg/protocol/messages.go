@@ -141,9 +141,9 @@ type Configuration struct {
 // ConfigurationResponse is the versioned envelope for the safe configuration
 // view consumed by the frontend and evaluators.
 type ConfigurationResponse struct {
-	APIVersion   string        `json:"api_version"`
+	APIVersion    string        `json:"api_version"`
 	Configuration Configuration `json:"configuration"`
-	Error        *Error        `json:"error,omitempty"`
+	Error         *Error        `json:"error,omitempty"`
 }
 
 // ErrorResponse is the canonical failure document.
