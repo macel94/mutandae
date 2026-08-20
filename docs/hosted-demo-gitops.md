@@ -40,7 +40,7 @@ concurrency controls without changing the frontend or protocol.
 | Change | Repository | Reason |
 |---|---|---|
 | Go code, templates, image, Redis client, application env contract | `mutandae` | Application source and publish workflow |
-| Redis StatefulSet/PVC/Secret, preview/live Deployments, Services, routing, TLS, NetworkPolicies, backup contract, Flux Kustomization | `belacca-gitops` | Cluster resources and GitOps source of truth |
+| Redis StatefulSet/PVC/Secret, preview/live Deployments, Services, routing, TLS, NetworkPolicies, backup contract, Flux root overlay | `belacca-gitops` | Cluster resources and GitOps source of truth |
 | Parent submodule pointer | `belacca-platform` | Workspace bookkeeping only; it never deploys by itself |
 
 A parent push is not a deployment. Push the owning child repository first, then
@@ -57,8 +57,8 @@ GitOps commit to reconcile, and verify Flux plus live behavior.
 
 2. **GitOps repository**
    - Copy the `clusters/<cluster>/mutandae/` overlay pattern.
-   - Create a dedicated Redis namespace/workload or use the documented shared
-     database namespace, but preserve unique Redis key prefixes.
+   - Extend the existing root-owned `clusters/belacca-production/mutandae/`
+     overlay for the dedicated Redis workload; preserve unique Redis key prefixes.
    - Create the Redis password as SOPS-encrypted Secret data; never commit it
      plaintext.
    - Set the preview/live image tag and digest from the application publish
@@ -77,6 +77,25 @@ GitOps commit to reconcile, and verify Flux plus live behavior.
    - Confirm a preview rotation/reset does not change live data. If the UI does
      not yet expose reset, verify isolation by using distinct environment
      prefixes and controlled lifecycle actions.
+
+## Verification evidence
+
+The hosted rollout was verified on the native cluster:
+
+- Flux root revision: `main@sha1:cff5f099`.
+- Mutandae application revision: `main@sha1:7d25b28`.
+- Redis StatefulSet: `1/1` ready.
+- Redis PVC: `5Gi`, `Bound`, Longhorn-backed.
+- Live and preview Deployments: `1/1`, using the same immutable image digest.
+- All three native edge IPs returned `200` for both hostnames after the
+  host-network Traefik NetworkPolicy sources were allowed.
+- `/api/v1/configuration` reported `live` and `preview` respectively, with
+  `persistence: redis` and `read_only: true`.
+- A preview rotation changed the preview identity response while the live
+  identity response remained unchanged.
+- `TestRedisRepositoryRealServerSnapshotIsolationAndPubSub` passed through a
+  temporary port-forward against the real Redis Service using a unique
+  `mutandae:test:<run>` prefix; cleanup scans and deletes only that prefix.
 
 ## Local Redis
 
