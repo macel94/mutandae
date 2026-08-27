@@ -22,13 +22,24 @@ func main() {
 	port := envInt("PORT", 8080)
 
 	// Composition root: wire the provider-aware execution boundary to the
-	// control plane. The demo starts from Azure: a simulated Entra ID tenant
-	// exposes its application registrations, which the control plane discovers
-	// and governs over the μTandae Protocol.
+	// control plane. The demo starts from three simulated cloud providers
+	// (Azure/Entra ID, AWS IAM, GCP IAM) fused into one multi-cloud adapter, which
+	// the control plane discovers and governs over the μTandae Protocol.
 	now := time.Now
 	startedAt := now()
 	tenantID := envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo")
-	adapter := provider.NewSimulator(tenantID, startedAt)
+	awsAccountID := envString("MUTANDAE_AWS_ACCOUNT", "123456789012")
+	awsRegion := envString("MUTANDAE_AWS_REGION", "us-east-1")
+	gcpProjectID := envString("MUTANDAE_GCP_PROJECT", "mutandae-demo")
+	gcpRegion := envString("MUTANDAE_GCP_REGION", "us-central1")
+	adapter, err := provider.NewMultiProvider(
+		provider.NewSimulator(tenantID, startedAt),
+		provider.NewAWSSimulator(awsAccountID, awsRegion, startedAt),
+		provider.NewGCPSimulator(gcpProjectID, gcpRegion, startedAt),
+	)
+	if err != nil {
+		log.Fatalf("wire multi-cloud provider adapters: %v", err)
+	}
 	var store *lifecycle.Store
 	var repository lifecycle.Repository
 	redisClient, redisClose, err := openRedisRepository()
@@ -69,7 +80,7 @@ func main() {
 		Configuration: config.Public{
 			Environment: envString("MUTANDAE_ENVIRONMENT", "preview"),
 			Persistence: persistenceLabel(repository),
-			Provider:    "azure-entra (simulated)",
+			Provider:    "multi-cloud (azure-entra, aws-iam, gcp-iam simulated)",
 			Clock:       now,
 		},
 		Clock:  now,
@@ -90,7 +101,7 @@ func main() {
 
 	go func() {
 		log.Printf("Mutandae demo listening on http://localhost:%d (Classical Latin: moo-TAHN-dye)", port)
-		log.Printf("Provider adapter: %s (simulated tenant %s)", adapter.Kind(), tenantID)
+		log.Printf("Provider adapters: azure-entra (tenant %s), aws-iam (account %s), gcp-iam (project %s)", tenantID, awsAccountID, gcpProjectID)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}

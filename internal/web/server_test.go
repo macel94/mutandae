@@ -134,6 +134,58 @@ func TestConfigurationPageAndProtocolEndpointAreSafe(t *testing.T) {
 	}
 }
 
+func TestMultiCloudDashboardRendersAllProviders(t *testing.T) {
+	fake := &fakeLifecycle{
+		identities: []protocol.MachineIdentity{
+			{ID: "orders-deployer", Name: "orders-deployer", Environment: "production",
+				Provider:  protocol.ProviderBinding{Provider: "aws-iam", ProviderID: "orders-deployer", AccountID: "123456789012", Region: "us-east-1"},
+				Ownership: protocol.Ownership{Team: "Orders Platform", Service: "Order deployment", Purpose: "deploys orders", Criticality: "high"},
+				Policy:    protocol.LifecyclePolicy{RenewalPeriod: "P90D"},
+				State:     protocol.StateActive, Health: protocol.HealthHealthy,
+				ExpiresAt: testNow().Add(75 * 24 * time.Hour)},
+			{ID: "inventory-broker", Name: "inventory-broker", Environment: "production",
+				Provider:  protocol.ProviderBinding{Provider: "gcp-iam", ProviderID: "1", ProjectID: "test-project", Region: "us-central1"},
+				Ownership: protocol.Ownership{Team: "Commerce", Service: "Stock", Purpose: "reconcilation", Criticality: "high"},
+				Policy:    protocol.LifecyclePolicy{RenewalPeriod: "P90D"},
+				State:     protocol.StateActive, Health: protocol.HealthAttention,
+				ExpiresAt: testNow().Add(5 * 24 * time.Hour)},
+			{ID: "payments-api", Name: "payments-api", Environment: "production",
+				Provider:  protocol.ProviderBinding{Provider: "azure-entra", ProviderID: "obj-1", TenantID: "tenant-1"},
+				Ownership: protocol.Ownership{Team: "Payments", Service: "Auth", Purpose: "authorization", Criticality: "critical"},
+				Policy:    protocol.LifecyclePolicy{RenewalPeriod: "P90D"},
+				State:     protocol.StateActive, Health: protocol.HealthHealthy,
+				ExpiresAt: testNow().Add(18 * 24 * time.Hour)},
+		},
+		events: map[string][]protocol.LifecycleEvent{},
+	}
+	handler, err := NewServer(Dependencies{Lifecycle: fake, Configuration: testConfiguration{}, Clock: func() time.Time { return testNow() }, Logger: testLogger{}})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		"Azure / Entra ID",
+		"AWS IAM",
+		"GCP IAM",
+		"Multi-cloud simulator",
+		"account 123456789012",
+		"project test-project",
+		"tenant tenant-1",
+		">Az<", // compact azure mark
+		">AW<", // compact aws mark
+		">GC<", // compact gcp mark
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("multi-cloud dashboard does not contain %q", expected)
+		}
+	}
+}
+
 func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	recorder := httptest.NewRecorder()
@@ -148,7 +200,7 @@ func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 		"must change.",
 		"moo-TAHN-dye",
 		"Azure / Entra ID",
-		"Azure simulator",
+		"Multi-cloud simulator",
 		"hx-post=\"/identities/payments-api/rotate\"",
 		"hx-post=\"/identities/payments-api/retire\"",
 		"x-data=\"{ filter: '', status: 'all', navOpen: false }\"",
@@ -164,8 +216,8 @@ func TestDashboardSummarySeparatesExpiringAndOverdue(t *testing.T) {
 	if view.Total != 4 || view.Healthy != 1 || view.Expiring != 2 || view.Attention != 2 {
 		t.Fatalf("summary = (total=%d healthy=%d expiring=%d attention=%d), want (4, 1, 2, 2)", view.Total, view.Healthy, view.Expiring, view.Attention)
 	}
-	if view.Provider != "azure-entra" || view.TenantID != "tenant-1" {
-		t.Fatalf("provider/tenant = (%q, %q), want (azure-entra, tenant-1)", view.Provider, view.TenantID)
+	if len(view.Providers) != 1 || view.Providers[0].Kind != "azure-entra" || view.Providers[0].Scope != "tenant tenant-1" {
+		t.Fatalf("providers = %+v, want one azure-entra adapter scoped to tenant tenant-1", view.Providers)
 	}
 }
 

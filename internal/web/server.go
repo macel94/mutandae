@@ -701,16 +701,14 @@ func (s *Server) dashboardView() dashboardView {
 		Identities: make([]identityView, 0, len(identities)),
 		UpdatedAt:  now.Format("15:04 MST"),
 	}
+	providers := make(map[string]providerSummary)
 	for _, identity := range identities {
 		item := toIdentityView(identity, now)
 		view.Identities = append(view.Identities, item)
 		view.Total++
-		if view.TenantID == "" && identity.Provider.TenantID != "" {
-			view.TenantID = identity.Provider.TenantID
-		}
-		if view.ProviderLabel == "" && identity.Provider.Provider != "" {
-			view.Provider = identity.Provider.Provider
-			view.ProviderLabel = providerLabel(identity.Provider.Provider)
+		kind := identity.Provider.Provider
+		if _, seen := providers[kind]; !seen && kind != "" {
+			providers[kind] = providerSummary{Kind: kind, Label: providerLabel(kind), Mark: providerMark(kind), Scope: providerScope(identity)}
 		}
 		switch item.Urgency {
 		case string(protocol.UrgencyHealthy):
@@ -724,6 +722,11 @@ func (s *Server) dashboardView() dashboardView {
 			view.Attention++
 		}
 	}
+	for _, kind := range []string{"azure-entra", "aws-iam", "gcp-iam"} {
+		if summary, ok := providers[kind]; ok {
+			view.Providers = append(view.Providers, summary)
+		}
+	}
 	return view
 }
 
@@ -733,16 +736,23 @@ type configurationPageView struct {
 	Requirements       protocol.AzureIntegrationRequirements
 }
 
+// dashboardView carries the multi-provider summary plus the identity inventory.
 type dashboardView struct {
-	Identities    []identityView
-	Total         int
-	Healthy       int
-	Expiring      int
-	Attention     int
-	UpdatedAt     string
-	Provider      string
-	ProviderLabel string
-	TenantID      string
+	Identities []identityView
+	Providers  []providerSummary
+	Total      int
+	Healthy    int
+	Expiring   int
+	Attention  int
+	UpdatedAt  string
+}
+
+// providerSummary is a single provider adapter rendered in the dashboard.
+type providerSummary struct {
+	Kind  string
+	Label string
+	Mark  string
+	Scope string
 }
 
 type identityView struct {
@@ -750,6 +760,7 @@ type identityView struct {
 	Name             string
 	Provider         string
 	ProviderKind     string
+	ProviderMark     string
 	Environment      string
 	Owner            string
 	Workload         string
@@ -793,7 +804,8 @@ func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityVi
 	base := identityView{
 		ID: identity.ID, Name: identity.Name,
 		Provider: providerLabel(identity.Provider.Provider), ProviderKind: identity.Provider.Provider,
-		Environment: identity.Environment, Owner: identity.Ownership.Team, Workload: identity.Ownership.Service,
+		ProviderMark: providerMark(identity.Provider.Provider),
+		Environment:  identity.Environment, Owner: identity.Ownership.Team, Workload: identity.Ownership.Service,
 		Criticality: identity.Ownership.Criticality, State: string(identity.State),
 		StateLabel: stateLabel(identity.State), RenewalHealth: string(identity.Health), Urgency: string(urg),
 		UrgencyLabel: urgencyLabel(urg), UrgencyClass: string(urg),
@@ -830,6 +842,34 @@ func providerLabel(kind string) string {
 			return "Unknown"
 		}
 		return kind
+	}
+}
+
+// providerMark is the compact avatar shown beside a provider in the inventory.
+func providerMark(kind string) string {
+	switch kind {
+	case "azure-entra":
+		return "Az"
+	case "aws-iam":
+		return "AW"
+	case "gcp-iam":
+		return "GC"
+	default:
+		return "?"
+	}
+}
+
+// providerScope describes which provider namespace an identity lives in.
+func providerScope(identity protocol.MachineIdentity) string {
+	switch identity.Provider.Provider {
+	case "azure-entra":
+		return "tenant " + identity.Provider.TenantID
+	case "aws-iam":
+		return "account " + identity.Provider.AccountID
+	case "gcp-iam":
+		return "project " + identity.Provider.ProjectID
+	default:
+		return ""
 	}
 }
 

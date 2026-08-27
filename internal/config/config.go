@@ -32,10 +32,11 @@ func (p Public) Configuration() protocol.Configuration {
 	}
 	provider := p.Provider
 	if provider == "" {
-		provider = "azure-entra (simulated)"
+		provider = "multi-cloud (azure-entra, aws-iam, gcp-iam simulated)"
 	}
 	features := []string{
-		"Azure/Entra simulator for the public lifecycle inventory",
+		"Multi-cloud simulator for the public lifecycle inventory",
+		"Azure/Entra ID, AWS IAM, and GCP IAM adapters",
 		"Protocol v1",
 		"Optional ephemeral Azure Graph integration",
 		"Graph mutations constrained by Application.ReadWrite.OwnedBy",

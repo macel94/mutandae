@@ -18,7 +18,7 @@
           <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span><strong>{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
         </td>
         <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
-        <td><span class="provider"><span class="provider-mark">A</span>{{ .Provider }}</span></td>
+        <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
         <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
         <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
         <td class="actions-cell">
