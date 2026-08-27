@@ -10,7 +10,7 @@ The visual and protocol mark is **μTandae**. Technical identifiers use the ASCI
 
 ## Status
 
-This repository contains the runnable public layer: the versioned **μTandae Protocol** (`pkg/protocol`), a small control-plane backend that speaks it, a simulated Azure/Entra ID provider adapter, and the open-source frontend — wired as one Azure-first demo.
+This repository contains the runnable public layer: the versioned **μTandae Protocol** (`pkg/protocol`), a small control-plane backend that speaks it, three simulated provider adapters (Azure/Entra ID, AWS IAM, GCP IAM), and the open-source frontend — wired as one multi-cloud demo.
 
 ## Product thesis
 
@@ -32,7 +32,7 @@ It provides the lifecycle governance and renewal orchestration layer above those
 1. Create one understandable lifecycle model for machine identities across Azure/Entra ID, AWS IAM, and GCP IAM.
 2. Make ownership, governance, expiry, renewal health, and retirement visible and actionable.
 3. Define a portable public lifecycle and rotation protocol.
-4. Prove the model through one excellent Azure-first vertical slice.
+4. Prove the model through one excellent Azure-first vertical slice, now extended to AWS IAM and GCP IAM with simulated adapters behind the same adapter boundary.
 5. Keep provider-specific production renewal and secure managed execution commercially meaningful.
 6. Minimize plaintext exposure and avoid becoming a generic long-term credential warehouse.
 
@@ -42,8 +42,8 @@ See [Product Objectives](docs/product-objectives.md).
 
 The MVP is intentionally narrow:
 
-- Azure-first
-- One real end-to-end provider integration
+- Azure-first, extended with AWS IAM and GCP IAM simulated adapters
+- One real end-to-end provider integration (Azure interactive extension)
 - One complete machine-identity lifecycle flow
 - One ownership and governance story
 - One renewal/rotation story
@@ -78,7 +78,7 @@ See [Brand Decisions](docs/brand-decisions.md).
 │   └── workflows/ci.yml       # Test, build, and GHCR publish pipeline
 ├── cmd/mutandae/              # Go application entrypoint (composition root)
 ├── pkg/protocol/              # μTandae Protocol v1: schemas, envelopes, validation
-├── internal/provider/         # Simulated + optional real Azure adapters
+├── internal/provider/         # Multi-cloud simulated adapters + optional real Azure client
 ├── internal/lifecycle/        # Control-plane domain store + adapter boundary
 ├── internal/web/              # HTTP handlers, templates, CSS, protocol JSON API
 ├── deploy/k3s/                # Later-stage Kubernetes deployment baseline
@@ -86,8 +86,13 @@ See [Brand Decisions](docs/brand-decisions.md).
 ├── go.mod
 └── docs/
     ├── protocol.md            # μTandae Protocol v1 specification
-    ├── azure-demo.md          # Synthetic Azure-first demo run guide
+    ├── providers.md           # Provider adapters and the protocol (Azure/AWS/GCP)
+    ├── azure-demo.md          # Synthetic Azure/Entra demo run guide
+    ├── multi-cloud-demo.md    # Multi-cloud demo run guide (Azure + AWS + GCP)
     ├── azure-integration.md    # Optional real-tenant + Key Vault runbook
+    ├── aws-integration.md      # AWS IAM simulator + real-world integration contract
+    ├── gcp-integration.md      # GCP IAM simulator + real-world integration contract
+    ├── integration-testing.md  # Credentials/permissions needed for real cloud evaluation
     ├── hosted-demo-gitops.md   # Hosted preview/live Redis + GitOps runbook
     ├── brand-decisions.md
     ├── implementation.md
@@ -96,7 +101,7 @@ See [Brand Decisions](docs/brand-decisions.md).
     └── product-objectives.md
 ```
 
-## Run the demo (Azure-first)
+## Run the demo (multi-cloud)
 
 You can test the hosted user experience at:
 
@@ -104,10 +109,13 @@ You can test the hosted user experience at:
 - **Preview/sandbox:** <https://preview.mutandae.com>
 - **Configuration:** append `/configuration` to either host
 
-The demo starts from Azure: a simulated Entra ID tenant exposes its application
-registrations, the control plane discovers and governs them over the μTandae
-Protocol, and the frontend renders the lifecycle. The Configuration page also
-offers an optional, ten-minute real-tenant path using exactly the Graph
+The demo starts from three simulated clouds: an Entra ID tenant
+(azure-entra), an AWS IAM account (aws-iam), and a Google Cloud project
+(gcp-iam). Their adapters are composited by `internal/provider.MultiProvider`;
+the control plane discovers and governs the combined inventory over the μ
+Tandae Protocol, and the frontend renders the lifecycle with per-provider
+labels (Azure/Entra ID, AWS IAM, GCP IAM). The Configuration page also offers
+an optional, ten-minute real-Azure path using exactly the Graph
 `Application.ReadWrite.OwnedBy` permission. Read
 [docs/azure-integration.md](docs/azure-integration.md) first; after a real-tenant
 trial, invalidate the temporary client credential and remove its consent.
@@ -123,15 +131,23 @@ go run ./cmd/mutandae
 
 Set `REDIS_URL` to use the temporary Redis-backed snapshot/pub-sub store; leave
 it unset for process-local development. Set `MUTANDAE_ENVIRONMENT=preview` or
-`live` to isolate Redis key prefixes.
+`live` to isolate Redis key prefixes. The simulated provider labels are
+configurable with `MUTANDAE_TENANT`, `MUTANDAE_AWS_ACCOUNT`,
+`MUTANDAE_AWS_REGION`, `MUTANDAE_GCP_PROJECT`, and `MUTANDAE_GCP_REGION` (see
+`.env.example`).
 
-See [docs/azure-demo.md](docs/azure-demo.md) for the synthetic walkthrough and
-protocol endpoints. See [docs/azure-integration.md](docs/azure-integration.md)
+See [docs/multi-cloud-demo.md](docs/multi-cloud-demo.md) for the synthetic
+walkthrough and protocol endpoints, with the per-provider details in
+[docs/azure-demo.md](docs/azure-demo.md), [docs/aws-integration.md](docs/aws-integration.md), and [docs/gcp-integration.md](docs/gcp-integration.md). See [docs/azure-integration.md](docs/azure-integration.md)
 for the optional real-tenant flow, vault prerequisites, and cleanup procedure. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
 for the replicable hosted deployment. See [docs/protocol.md](docs/protocol.md)
-for the protocol specification and the machine-readable
+for the protocol specification, [docs/providers.md](docs/providers.md) for the
+provider adapter reference, and the machine-readable
 [`pkg/protocol/schema/mutandae.v1.json`](pkg/protocol/schema/mutandae.v1.json)
-JSON Schema. See [Implementation Choices](docs/implementation.md) for the
+JSON Schema. [docs/integration-testing.md](docs/integration-testing.md) lists
+exactly what a caller must contribute (credentials, app IDs, secret API keys,
+permissions) to evaluate the protocol and UI with real integration tests on
+each cloud. See [Implementation Choices](docs/implementation.md) for the
 architecture, tests, container image, GHCR publishing, and future K3s path.
 
 The repository is currently private. The published runtime image is intended to be public in GHCR so the native K3s cluster can pull it without a registry credential. Native DNS, TLS, routing, and Flux deployment configuration lives in the private `belacca-gitops` repository.
@@ -152,7 +168,8 @@ The repository is currently private. The published runtime image is intended to 
 2. ~~Define the canonical domain model and state transitions.~~ → **done** in `pkg/protocol` + `internal/lifecycle`.
 3. ~~Build a minimal runnable control-plane shell with a local/simulated provider adapter.~~ → **done**: Azure-first demo.
 4. ~~Build the open-source frontend around lifecycle and governance workflows.~~ → **done** (HTMX dashboard + protocol API).
-5. Add the private Azure renewal boundary without publishing provider-specific production logic.
-6. Validate the complete Azure-first vertical slice against the MVP success criteria.
+5. ~~Extend the simulated demo to AWS IAM and GCP IAM behind the same adapter boundary.~~ → **done**: `internal/provider/multicloud.go` composites the three simulators; the frontend renders per-provider labels.
+6. Add the private Azure renewal boundary without publishing provider-specific production logic.
+7. Validate the protocol and UI against real AWS IAM and GCP IAM APIs with the evaluator-supplied credentials in [docs/integration-testing.md](docs/integration-testing.md), mirroring the existing Azure interactive extension.
 
 See [MVP Objectives](docs/mvp-objectives.md) for the milestones and success criteria.

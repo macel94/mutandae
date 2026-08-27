@@ -6,7 +6,7 @@ The complete native-production delivery, troubleshooting history, attestation
 compatibility findings, and final verification are documented in
 [`docs/native-production-delivery.md`](native-production-delivery.md).
 
-This repository now contains a runnable Azure-first vertical slice: a versioned μTandae Protocol in `pkg/protocol`, a simulated Azure/Entra ID adapter plus an optional real Microsoft Graph/Key Vault adapter in `internal/provider`, an in-memory control-plane store in `internal/lifecycle`, and the open-source frontend plus protocol JSON APIs in `internal/web`.
+This repository now contains a runnable multi-cloud vertical slice: a versioned μTandae Protocol in `pkg/protocol`, simulated Azure/Entra ID, AWS IAM, and GCP IAM adapters (plus an optional real Microsoft Graph/Key Vault adapter) in `internal/provider`, an in-memory control-plane store in `internal/lifecycle`, and the open-source frontend plus protocol JSON APIs in `internal/web`.
 
 ## Product name and pronunciation
 
@@ -78,13 +78,8 @@ It is intentionally not provisioned by the current GitOps change.
 ### Provider adapter boundary
 
 `internal/lifecycle` defines a small consumer-side `Adapter` interface
-(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider` ships both the public demo's **simulated azure-entra
-adapter** and a standard-library real Azure client for the interactive path.
-The real client uses Microsoft Graph client credentials, enforces
-`Application.ReadWrite.OwnedBy` through Graph ownership checks, and optionally
-writes/reads generated values through an existing Azure Key Vault. It never
-returns client secrets or Graph tokens from a provider interface, and all real
-sessions are process-local and TTL-bounded.
+(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider` ships three simulated adapters (`azure-entra`, `aws-iam`, `gcp-iam`) composed behind a `MultiProvider` boundary (see [providers.md](providers.md)), plus a standard-library real Azure client for the interactive path. The composite fans discovery out and routes mutations by `ProviderBinding.provider`, so the control plane never needs to know provider mechanics.
+The real client uses Microsoft Graph client credentials, enforces `Application.ReadWrite.OwnedBy` through Graph ownership checks, and optionally writes/reads generated values through an existing Azure Key Vault. It never returns client secrets or Graph tokens from a provider interface, and all real sessions are process-local and TTL-bounded.
 
 ### Control-plane store
 

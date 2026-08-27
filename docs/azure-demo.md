@@ -2,7 +2,9 @@
 
 The Mutandae demo starts from a simulated Azure / Entra ID tenant. Its application registrations are discovered by the `azure-entra` provider adapter and adopted into governance by the Mutandae control plane over the μTandae Protocol. The browser dashboard and the versioned JSON API then expose the same governed identities, lifecycle transitions, and audit evidence.
 
-The lifecycle inventory is a simulated Azure/Entra tenant and does not require Azure credentials. The optional real-tenant workflow is documented in [azure-integration.md](azure-integration.md) and is isolated in an expiring in-memory session. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe runtime contract and, only when ready, the explicitly opt-in integration panel.
+The demo now also seeds simulated AWS IAM users and GCP IAM service accounts behind the same adapter boundary, so the default inventory is multi-cloud. This document is the Azure-focused walkthrough; see [multi-cloud-demo.md](multi-cloud-demo.md) for the combined inventory and cross-provider walkthrough.
+
+The Azure portion of the lifecycle inventory is a simulated Azure/Entra tenant and does not require Azure credentials (the default demo also seeds simulated AWS IAM and GCP IAM identities). The optional real-tenant workflow is documented in [azure-integration.md](azure-integration.md) and is isolated in an expiring in-memory session. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe runtime contract and, only when ready, the explicitly opt-in integration panel.
 
 ## Run it
 
@@ -74,7 +76,7 @@ The initial adoption is real control-plane work: the store does not invent a dis
 
 ## Seeded identities
 
-The simulator seeds four application registrations. `Expiry offset` is relative to the simulator's startup time. Every seeded registration has a 90-day renewal policy (`P90D`). The dashboard derives `expiring` when expiry is within 30 days and `overdue` when expiry has passed; `health` is the protocol health field.
+The Azure simulator seeds four application registrations (4 of the 10 identities in the multi-cloud inventory). `Expiry offset` is relative to the simulator's startup time. Every seeded registration has a 90-day renewal policy (`P90D`). The dashboard derives `expiring` when expiry is within 30 days and `overdue` when expiry has passed; `health` is the protocol health field.
 
 | Identity | Environment | Expiry offset | Health | Policy days |
 |---|---|---:|---|---:|
@@ -156,7 +158,7 @@ List all identities currently governed by the in-memory store:
 curl -s http://localhost:8080/api/v1/identities
 ```
 
-The initial response has `total: 4`. The identity objects use the protocol's actual nested `provider`, `ownership`, `policy`, and `credential` shapes:
+The initial response has `total: 4` for this Azure-focused walkthrough; the default multi-cloud demo returns `total: 10` (see [multi-cloud-demo.md](multi-cloud-demo.md)). The identity objects use the protocol's actual nested `provider`, `ownership`, `policy`, and `credential` shapes:
 
 ```json
 {
@@ -379,7 +381,7 @@ Omitting confirmation returns HTTP `409` with the protocol error envelope:
 ### 1. Observe discovery and adoption
 
 1. Start the server and open <http://localhost:8080>.
-2. The dashboard shows the four seeded application registrations from the simulated Azure / Entra ID tenant.
+2. The dashboard shows the ten governed identities across the simulated Azure, AWS, and GCP adapters; the four seeded Azure application registrations are part of that inventory.
 3. Select an identity's audit-trail button. Chronologically, its initial events are:
    - `identity.discovered`, emitted by the `discovery` actor with the provider ID in `details`;
    - `identity.registered`, emitted by the `control-plane` actor as the registration is adopted into governance.

@@ -138,6 +138,53 @@ Example:
 }
 ```
 
+The wire schema is intentionally provider-neutral: the provider chooses how
+its identifier space maps onto the generic fields, and the control plane never
+interprets them. The mappings below name how the shipped providers populate
+those fields so callers and adapters share one vocabulary. They are
+conventions, not conformance requirements — the validator only requires
+`provider` and `provider_id`.
+
+#### `azure-entra`
+
+- `provider` is `azure-entra`.
+- `provider_id` is the Entra ID application object ID (a UUID).
+- `tenant_id` is the Azure/Entra tenant ID.
+- `object_id` is the application (service principal) object ID; it typically
+equals `provider_id`.
+- `region` is an optional Azure region such as `westeurope`.
+- `account_id` and `project_id` are unused but may be present.
+- `CredentialReference.kind` is `client_secret`, `delivery` is `keyvault-ref`,
+and `location` is a Key Vault reference such as
+`keyvault://<vault>/secrets/<name>`.
+
+#### `aws-iam`
+
+- `provider` is `aws-iam`.
+- `provider_id` is the IAM user name (or an IAM role ARN for assumed-role
+identities).
+- `account_id` is the 12-digit AWS account ID (e.g. `123456789012`).
+- `region` is the AWS region in which the identity or its secret manager
+resides (e.g. `us-east-1`).
+- `project_id` is optional and unused by the AWS adapter; `tenant_id` and
+`object_id` are also unused.
+- `CredentialReference.kind` is `access_key`, `delivery` is `secret-manager`
+(or `environment` for an env-var bootstrap reference), and `location` uses the
+form `iam://<accountID>/user/<userName>`.
+
+#### `gcp-iam`
+
+- `provider` is `gcp-iam`.
+- `provider_id` is the service-account unique ID, or the service-account email
+`<name>@<projectID>.iam.gserviceaccount.com` when only the email is known.
+- `project_id` is the GCP project ID.
+- `region` is the GCP region (e.g. `us-central1`).
+- `account_id`, `tenant_id`, and `object_id` are optional and unused by the
+GCP adapter.
+- `CredentialReference.kind` is `service_account_key`, `delivery` is
+`secret-manager`, and `location` uses
+`iam://projects/<projectID>/serviceAccounts/<email>/keys/<keyID>`.
+
 ### 2.3 `Ownership`
 
 `Ownership` records who is accountable, which service is involved, and the
@@ -929,3 +976,8 @@ API calls, endpoints, or hostnames—stays behind the `ProviderAdapter` boundary
 The control plane, frontend, and other protocol consumers depend on this
 contract rather than on cloud SDK details; provider-specific execution never
 belongs in the protocol itself.
+
+See [providers.md](providers.md) for the companion reference on provider
+adapters, the shipped simulated adapters, the composite multi-cloud adapter,
+and how the interactive Azure / Entra extension generalizes to AWS IAM and GCP
+IAM.

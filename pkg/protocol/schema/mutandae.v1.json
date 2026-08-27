@@ -73,6 +73,7 @@
   "$defs": {
     "ProviderBinding": {
       "type": "object",
+      "$comment": "Provider-neutral binding. The `provider` token names the adapter; shipped simulated kinds are `azure-entra`, `aws-iam`, and `gcp-iam` (see ../docs/protocol.md sections 2.2 for per-provider field conventions, without making any of them here). The provider-specific identifier fields (`tenant_id`, `object_id`, `region`, `account_id`, `project_id`) are opaque to the control plane, so this block intentionally stays loose and does not enumerate provider kind values.",
       "additionalProperties": false,
       "properties": {
         "provider": {
