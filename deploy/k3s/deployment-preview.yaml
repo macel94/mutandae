@@ -39,6 +39,14 @@ spec:
               value: preview
             - name: MUTANDAE_TENANT
               value: mutandae-preview-synthetic
+            - name: MUTANDAE_AWS_ACCOUNT
+              value: "123456789012"
+            - name: MUTANDAE_AWS_REGION
+              value: us-east-1
+            - name: MUTANDAE_GCP_PROJECT
+              value: mutandae-preview-demo
+            - name: MUTANDAE_GCP_REGION
+              value: us-central1
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:

@@ -39,6 +39,14 @@ spec:
               value: live
             - name: MUTANDAE_TENANT
               value: mutandae-live-synthetic
+            - name: MUTANDAE_AWS_ACCOUNT
+              value: "123456789012"
+            - name: MUTANDAE_AWS_REGION
+              value: us-east-1
+            - name: MUTANDAE_GCP_PROJECT
+              value: mutandae-live-demo
+            - name: MUTANDAE_GCP_REGION
+              value: us-central1
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
