@@ -49,6 +49,8 @@ The MVP is intentionally narrow:
 - One renewal/rotation story
 - One credible open-core architecture
 
+The public demo adds a live **New identity** flow on top: pick an identity type (Azure / Entra ID, AWS IAM, or GCP IAM) and the control plane creates a real zero-permission identity in that tenant, delivers the credential into that cloud's native vault (Azure Key Vault, AWS Secrets Manager, or GCP Secret Manager), and makes the secret retrievable on demand — every use, renewal, and revocation is an audited lifecycle event. See the [live demo](docs/live-demo.md) and [multi-cloud demo](docs/multi-cloud-demo.md) documents.
+
 The public project will contain the frontend, shared protocol, public abstractions, and a very small control-plane shell. Provider-specific production renewal engines, secure managed execution, and advanced integrations remain private/commercial.
 
 See [MVP Objectives](docs/mvp-objectives.md) and [Open-Core Boundary](docs/open-core-boundary.md).

@@ -451,6 +451,9 @@ actor records.
 | `EventRotationCompleted` | `rotation.completed` | Rotation workflow |
 | `EventRotationFailed` | `rotation.failed` | Rotation workflow |
 | `EventRotationRollBack` | `rotation.rolled_back` | Rotation workflow |
+| `EventCredentialDelivered` | `credential.delivered` | Credential vault delivery |
+| `EventCredentialUsed` | `credential.used` | Credential vault delivery |
+| `EventCredentialRevoked` | `credential.revoked` | Credential vault delivery |
 | `EventIdentityRetired` | `identity.retired` | Decommissioning |
 | `EventIdentityRevoked` | `identity.revoked` | Decommissioning |
 | `EventIdentityResurrected` | `identity.resurrected` | Decommissioning |
@@ -777,7 +780,52 @@ it returns the exact actor string `operator` (`ActorOperator`).
 | `Events` | `events` | `[]LifecycleEvent` | No (`omitempty`) |
 | `Error` | `error` | `*Error` | No (`omitempty`) |
 
-### 7.7 Errors
+### 7.7 Use (credential retrieval from the selected vault)
+
+#### `UseRequest`
+
+`UseRequest` retrieves the current (or a pinned) credential version of one
+governed identity from its selected provider-native vault — Azure Key Vault,
+AWS Secrets Manager, or GCP Secret Manager. Every successful use is audited as
+a `credential.used` event carrying the actor and the vault reference. The
+secret value is written only to the single HTTP response; it is never
+persisted in Redis, snapshots, events, logs, or HTML.
+
+| Go field | JSON field | Go type | Required |
+| --- | --- | --- | --- |
+| `ID` | `id` | `string` | Yes |
+| `RequestedBy` | `requested_by` | `string` | No (`omitempty`) |
+| `Version` | `version` | `string` | No (`omitempty`); empty means the current version |
+
+`RequestedByOrDefault()` returns `RequestedBy` when it is non-empty; otherwise
+it returns the exact actor string `operator` (`ActorOperator`).
+
+#### `UseResponse`
+
+| Go field | JSON field | Go type | Required |
+| --- | --- | --- | --- |
+| `APIVersion` | `api_version` | `string` | Yes |
+| `Identity` | `identity` | `MachineIdentity` | Yes |
+| `KeyID` | `key_id` | `string` | No (`omitempty`) |
+| `Secret` | `secret` | `string` | No (`omitempty`) |
+| `Vault` | `vault` | `VaultReference` | No (`omitempty`) |
+| `Error` | `error` | `*Error` | No (`omitempty`) |
+
+Use is refused for retired identities (retirement revokes the vault copy) and
+for adapters without a configured vault.
+
+### 7.8 Vault delivery semantics
+
+Provisioning and renewal may deliver the freshly issued credential to the
+selected provider-native vault. The delivered reference is carried on the
+provision response (`vault`, a `VaultReference`) and audited as
+`credential.delivered`; retirement revokes the vault copy and audits
+`credential.revoked`. Delivery failures are audited with an `attention`
+outcome and never fail the lifecycle operation itself. Vault references,
+events, and identity metadata carry vault URLs, secret names, and versions
+only — never secret material.
+
+### 7.9 Errors
 
 #### `Error`
 

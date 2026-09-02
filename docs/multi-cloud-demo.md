@@ -133,11 +133,13 @@ fragments for HTMX. Unchanged from the Azure demo:
 
 | Method | Path | Behavior |
 |---|---|---|
-| `GET` | `/` | Full dashboard: multi-cloud inventory, lifecycle summary, audit-trail panel. |
+| `GET` | `/` | Full dashboard: multi-cloud inventory, lifecycle summary, audit-trail panel, and the New identity control (hero and inventory heading) when real provisioning is wired. |
 | `GET` | `/partials/identities` | Re-renders the `#identity-list` inventory fragment. |
 | `GET` | `/identities/{id}/events` | Renders the selected identity's audit trail, newest first. |
-| `POST` | `/identities/{id}/rotate` | Synchronous simulated rotation routed to the identity's provider; returns the refreshed identity-list fragment. |
-| `POST` | `/identities/{id}/retire` | Explicitly confirmed retirement routed to the identity's provider; returns the refreshed identity-list fragment. |
+| `POST` | `/identities/provision` | Creates a real zero-permission identity for the selected provider type; the dashboard fragment reports the vault delivery and refreshes the inventory out-of-band. |
+| `POST` | `/identities/{id}/rotate` | Synchronous rotation routed to the identity's provider; renews the vault copy as a new secret version; returns the refreshed identity-list fragment. |
+| `POST` | `/identities/{id}/use` | Retrieves the current credential from the provider's native vault and renders the audited retrieval fragment. |
+| `POST` | `/identities/{id}/retire` | Explicitly confirmed retirement routed to the identity's provider; also revokes the vault copy; returns the refreshed identity-list fragment. |
 
 ## Health probes
 
@@ -222,17 +224,29 @@ curl -s -X POST http://localhost:8080/api/v1/identities/metrics-publisher/retire
    footer. Select an identity's audit-trail button; its initial events are
    `identity.discovered` (with `provider_id` in `details`) followed by
    `identity.registered`.
-2. **Rotate across clouds.** Click **Rotate** on `orders-deployer` (AWS) and
+2. **Create a real identity with the New identity flow.** On the live demo,
+   pick the identity type in the dropdown and press **New identity**. The
+   identity is provisioned for real with zero permissions, its credential is
+   delivered to the selected cloud's native vault (`credential.delivered`
+   event, vault name/version shown in the result and in the inventory's Vault
+   column), and the one-time secret is disclosed exactly once in the response.
+3. **Use the credential again — audited.** Press the inventory's ✦ action:
+   the current vault version is retrieved and shown, and a
+   `credential.used` event with the actor and vault reference lands in the
+   audit trail. The secret is now viewable more than once without ever
+   weakening the one-time control-plane disclosure.
+4. **Rotate across clouds.** Click **Rotate** on `orders-deployer` (AWS) and
    `inventory-broker` (GCP), or call the protocol endpoints above. Verify the
    identity returns to `active` with `healthy` health, a ~90-day governed
    expiry, and correlated rotation events carrying the provider-observed
-   `key_id` and `fingerprint`.
-3. **Retire with explicit confirmation.** Use the dashboard **Retire** action
+   `key_id` and `fingerprint`. On the live demo the renewed credential is
+   delivered to the same vault as a new version.
+5. **Retire with explicit confirmation.** Use the dashboard **Retire** action
    or the API with `{"confirm":true}`. Retiring `legacy-reporting` (Azure),
    `metrics-publisher` (AWS), or `catalog-replication` (GCP) shows
-   `state: "retired"`; the simulator disabled the provider-side registration,
-   so it is not rediscovered while remaining visible in the store's audit
-   trail.
+   `state: "retired"`; the provider-side registration is disabled or deleted,
+   the vault copy is revoked (`credential.revoked`), and the record remains
+   visible in the store's audit trail.
 
 ## Provider-specific documents
 
