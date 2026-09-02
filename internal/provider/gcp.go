@@ -518,18 +518,32 @@ func (a *GCPAdapter) createServiceAccount(ctx context.Context, accountID, displa
 }
 
 // emailFor resolves a service account unique id (the ProviderBinding) to its
-// email, refreshing the mapping from IAM so mutations route correctly.
+// email, refreshing the mapping from IAM so mutations route correctly. IAM's
+// list can lag a just-created service account, so the lookup retries briefly
+// before giving up.
 func (a *GCPAdapter) emailFor(ctx context.Context, uniqueID string) (string, error) {
-	accounts, err := a.listServiceAccounts(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, account := range accounts {
-		if account.UniqueID == uniqueID {
-			return account.Email, nil
+	const attempts = 4
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		accounts, err := a.listServiceAccounts(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, account := range accounts {
+			if account.UniqueID == uniqueID {
+				return account.Email, nil
+			}
+		}
+		lastErr = fmt.Errorf("%s: unknown provider id %q", gcpKind, uniqueID)
+		if attempt < attempts-1 {
+			select {
+			case <-time.After(700 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 		}
 	}
-	return "", fmt.Errorf("%s: unknown provider id %q", gcpKind, uniqueID)
+	return "", lastErr
 }
 
 // --- IAM REST API plumbing ---
