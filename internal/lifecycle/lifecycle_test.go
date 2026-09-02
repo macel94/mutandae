@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,11 +308,14 @@ func TestErrorCodeMapping(t *testing.T) {
 // never persisted.
 type provisioningAdapter struct {
 	*fakeAdapter
+	mu           sync.Mutex
 	createdNames []string
 }
 
 func (p *provisioningAdapter) Create(_ context.Context, provider, name string) (protocol.ProvisionResponse, error) {
+	p.mu.Lock()
 	p.createdNames = append(p.createdNames, name)
+	p.mu.Unlock()
 	return protocol.ProvisionResponse{
 		APIVersion: protocol.Version,
 		Identity: protocol.MachineIdentity{

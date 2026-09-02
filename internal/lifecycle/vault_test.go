@@ -276,6 +276,54 @@ func TestRetireRevokesTheVaultCopy(t *testing.T) {
 	}
 }
 
+func TestConcurrentProvisionAndUseAreSafeAndAudited(t *testing.T) {
+	adapter := &vaultAdapter{provisioningAdapter: &provisioningAdapter{fakeAdapter: &fakeAdapter{}}}
+	store := vaultTestStore(t, adapter)
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := store.Provision(context.Background(), protocol.ProvisionRequest{Provider: "aws-iam"}, now())
+			if err != nil {
+				errCh <- err
+				return
+			}
+			used, err := store.Use(context.Background(), protocol.UseRequest{ID: resp.Identity.ID}, now())
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if used.Secret != "top-secret" {
+				errCh <- fmt.Errorf("use secret = %q", used.Secret)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent provision/use: %v", err)
+	}
+	// The fake issues one shared identity id, so every provision and use
+	// appends exactly one audited event to that id's trail.
+	events, _ := store.Events("mutandae-demo-ab12")
+	delivered, used := 0, 0
+	for _, event := range events {
+		switch event.Type {
+		case protocol.EventCredentialDelivered:
+			delivered++
+		case protocol.EventCredentialUsed:
+			used++
+		}
+	}
+	if delivered != goroutines || used != goroutines {
+		t.Fatalf("delivered = %d, used = %d; want %d of each", delivered, used, goroutines)
+	}
+}
+
 func TestRetireVaultRevocationFailureIsAuditedAndNonFatal(t *testing.T) {
 	adapter := &vaultAdapter{
 		provisioningAdapter: &provisioningAdapter{fakeAdapter: &fakeAdapter{}},

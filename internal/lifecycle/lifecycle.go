@@ -645,6 +645,8 @@ func (s *Store) deliverToVault(ctx context.Context, identity protocol.MachineIde
 	}
 	now = now.UTC()
 	ref, err := vault.StoreSecret(ctx, identity, keyID, secret)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err != nil {
 		s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
 			"Vault delivery failed: the credential was issued but not stored in the "+providerVaultLabel(identity.Provider.Provider),
