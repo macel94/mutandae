@@ -130,6 +130,89 @@ only create/read/delete secrets under the `mutandae-demo-*` namespace, and the
 only values ever stored are the zero-permission credentials of demo identities
 themselves.
 
+#### Applying the AWS grant (governor `mutandae-governor`, account `572030963802`)
+
+```sh
+# Re-authenticate first: aws login
+aws iam put-user-policy --user-name mutandae-governor --policy-name mutandae-demo-scope --policy-document '{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": ["iam:ListUsers", "iam:GetUser", "iam:ListAccessKeys"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DemoIdentityLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateUser", "iam:CreateAccessKey", "iam:DeleteAccessKey",
+        "iam:DeleteLoginProfile", "iam:DeleteUser", "iam:TagUser"
+      ],
+      "Resource": "arn:aws:iam::572030963802:user/mutandae-demo-*"
+    },
+    {
+      "Sid": "DemoVaultDelivery",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret", "secretsmanager:PutSecretValue",
+        "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource", "secretsmanager:DeleteSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:572030963802:secret:mutandae-demo-*"
+    },
+    {
+      "Sid": "ExplicitDenyPrivilegeEscalation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:AttachUserPolicy", "iam:PutUserPolicy", "iam:AddUserToGroup",
+        "iam:CreateLoginProfile", "iam:CreateRole", "iam:AttachRolePolicy",
+        "iam:PutRolePolicy", "iam:PassRole", "iam:CreatePolicy"
+      ],
+      "Resource": "*"
+    }
+  ]
+}'
+```
+
+#### Applying the GCP grant (governor `mutandae-governor@mutandae-demo`)
+
+```sh
+gcloud services enable secretmanager.googleapis.com --project=mutandae-demo
+
+gcloud iam roles create mutandaeDemoSecretManager --project=mutandae-demo \
+  --title="Mutandae demo secret delivery" \
+  --permissions=secretmanager.secrets.create,secretmanager.secrets.get,secretmanager.versions.add,secretmanager.versions.get,secretmanager.versions.access,secretmanager.versions.list,secretmanager.versions.disable
+
+gcloud projects add-iam-policy-binding mutandae-demo \
+  --member="serviceAccount:mutandae-governor@mutandae-demo.iam.gserviceaccount.com" \
+  --role="projects/mutandae-demo/roles/mutandaeDemoSecretManager"
+```
+
+Optionally harden the binding with an IAM condition
+`resource.name.startsWith("projects/_/secrets/mutandae-demo-")`.
+
+#### Applying the Azure grant (governor `mutandae-eval`)
+
+```sh
+az login
+VAULT_ID=$(az keyvault show --name <demo-vault> --query id -o tsv)
+az role assignment create \
+  --assignee-object-id f207d334-1030-4d60-b7c2-06c6f2e422c0 \
+  --assignee-principal-type ServicePrincipal \
+  --role "Key Vault Secrets Officer" \
+  --scope "$VAULT_ID"
+# then store the vault URL in the deployment secret:
+k3s kubectl -n mutandae patch secret mutandae-provider-credentials \
+  -p '{"stringData":{"AZURE_KEY_VAULT_URL":"https://<demo-vault>.vault.azure.net/"}}'
+k3s kubectl -n mutandae rollout restart deploy/mutandae
+```
+
+Until the grants are applied, the demo stays honest: provisioning succeeds,
+the audit trail carries an attention `credential.delivered` event naming the
+failure, and the provision result shows the explicit "no vault copy" state.
+
 ### Vault environment variables
 
 | Variable | Default | Effect |
