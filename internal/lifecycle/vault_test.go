@@ -324,6 +324,43 @@ func TestConcurrentProvisionAndUseAreSafeAndAudited(t *testing.T) {
 	}
 }
 
+func TestProvisionWithDisabledVaultCapabilityStaysSilentAndHonest(t *testing.T) {
+	// The MultiProvider-style contract: capability methods exist but report
+	// ErrVaultUnsupported when the operator disabled delivery.
+	adapter := &disabledVaultAdapter{provisioningAdapter: &provisioningAdapter{fakeAdapter: &fakeAdapter{}}}
+	store := vaultTestStore(t, adapter)
+
+	resp, err := store.Provision(context.Background(), protocol.ProvisionRequest{Provider: "aws-iam"}, now())
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.Vault != nil {
+		t.Fatal("response must not claim a vault delivery when the capability is disabled")
+	}
+	events, _ := store.Events(resp.Identity.ID)
+	for _, event := range events {
+		if event.Type == protocol.EventCredentialDelivered {
+			t.Fatal("disabled vault capability must not emit delivery events")
+		}
+	}
+}
+
+type disabledVaultAdapter struct {
+	*provisioningAdapter
+}
+
+func (d *disabledVaultAdapter) StoreSecret(context.Context, protocol.MachineIdentity, string, string) (protocol.VaultReference, error) {
+	return protocol.VaultReference{}, ErrVaultUnsupported
+}
+
+func (d *disabledVaultAdapter) ReadSecret(context.Context, protocol.MachineIdentity, string, string) (string, protocol.VaultReference, error) {
+	return "", protocol.VaultReference{}, ErrVaultUnsupported
+}
+
+func (d *disabledVaultAdapter) RevokeSecret(context.Context, protocol.MachineIdentity, string) (protocol.VaultReference, error) {
+	return protocol.VaultReference{}, ErrVaultUnsupported
+}
+
 func TestRetireVaultRevocationFailureIsAuditedAndNonFatal(t *testing.T) {
 	adapter := &vaultAdapter{
 		provisioningAdapter: &provisioningAdapter{fakeAdapter: &fakeAdapter{}},

@@ -522,6 +522,9 @@ func (s *Store) revokeFromVault(ctx context.Context, identity protocol.MachineId
 	now = now.UTC()
 	ref, err := vault.RevokeSecret(ctx, identity, identity.Credential.KeyID)
 	if err != nil {
+		if errors.Is(err, ErrVaultUnsupported) {
+			return
+		}
 		s.mu.Lock()
 		s.addEvent(identity.ID, now, protocol.EventCredentialRevoked,
 			"Vault revocation failed: "+err.Error(), protocol.ActorProviderAdapter,
@@ -648,6 +651,12 @@ func (s *Store) deliverToVault(ctx context.Context, identity protocol.MachineIde
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
+		// An intentionally absent vault capability is not a failure: it means
+		// the operator disabled delivery (MUTANDAE_VAULT=off or no vault URL),
+		// so the provision result simply reports no vault copy.
+		if errors.Is(err, ErrVaultUnsupported) {
+			return nil
+		}
 		s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
 			"Vault delivery failed: the credential was issued but not stored in the "+providerVaultLabel(identity.Provider.Provider),
 			protocol.ActorProviderAdapter, protocol.OutcomeAttention,
