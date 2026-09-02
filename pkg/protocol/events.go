@@ -32,6 +32,16 @@ const (
 	EventRotationRollBack  EventType = "rotation.rolled_back"
 )
 
+// Credential vault events. They record that a credential was delivered to,
+// retrieved from, or revoked in the selected provider-native vault (Azure Key
+// Vault, AWS Secrets Manager, GCP Secret Manager). Details carry vault names,
+// versions, and key ids only — never secret material.
+const (
+	EventCredentialDelivered EventType = "credential.delivered"
+	EventCredentialUsed      EventType = "credential.used"
+	EventCredentialRevoked   EventType = "credential.revoked"
+)
+
 // Interactive provider integration events. These events may be published to
 // Redis, but their details must remain redacted and secret-free.
 const (

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mutandae/mutandae/pkg/protocol"
@@ -23,6 +24,14 @@ type AzureCloudAdapterConfig struct {
 	ClientSecret string
 	HTTPClient   *http.Client
 	Now          func() time.Time
+	// VaultURL, when set, enables the vault delivery capability against an
+	// existing Azure Key Vault (must be an HTTPS *.vault.azure.net endpoint).
+	// The governor application needs the Key Vault data-plane role documented
+	// in docs/live-demo.md; Graph permissions do not grant vault access.
+	VaultURL string
+	// VaultSecretPrefix restricts the Key Vault secret-name namespace the demo
+	// writes to (default "mutandae").
+	VaultSecretPrefix string
 }
 
 // AzureCloudAdapter is a real Microsoft Graph adapter behind the CloudAdapter
@@ -37,6 +46,11 @@ type AzureCloudAdapter struct {
 	client   *AzureClient
 	tenantID string
 	now      func() time.Time
+	vault    *azureDemoVault
+
+	mu            sync.Mutex
+	oneTimeSecret string
+	oneTimeKeyID  string
 }
 
 // NewAzureCloudAdapter validates connection material and returns a real Graph
@@ -68,7 +82,15 @@ func NewAzureCloudAdapter(cfg AzureCloudAdapterConfig) (*AzureCloudAdapter, erro
 	if err != nil {
 		return nil, err
 	}
-	return &AzureCloudAdapter{client: client, tenantID: cfg.TenantID, now: now}, nil
+	adapter := &AzureCloudAdapter{client: client, tenantID: cfg.TenantID, now: now}
+	if strings.TrimSpace(cfg.VaultURL) != "" {
+		vault, err := newAzureDemoVault(cfg.VaultURL, cfg.VaultSecretPrefix, client, httpClient, now)
+		if err != nil {
+			return nil, err
+		}
+		adapter.vault = vault
+	}
+	return adapter, nil
 }
 
 // Kind returns the stable provider identifier.
@@ -117,6 +139,7 @@ func (a *AzureCloudAdapter) Create(ctx context.Context, hint string) (protocol.P
 	}
 	app.Credentials = []protocol.AzureCredential{secret.Credential}
 	identity := a.toIdentity(app)
+	a.rememberOneTimeSecret(secret.SecretText, secret.Credential.KeyID)
 	return protocol.ProvisionResponse{
 		APIVersion:    protocol.Version,
 		Identity:      identity,
@@ -143,8 +166,30 @@ func (a *AzureCloudAdapter) Rotate(ctx context.Context, identity protocol.Machin
 			return protocol.MachineIdentity{}, err
 		}
 	}
+	a.rememberOneTimeSecret(secret.SecretText, secret.Credential.KeyID)
 	app := protocol.AzureApplication{ObjectID: objectID, DisplayName: identity.Name, Credentials: []protocol.AzureCredential{secret.Credential}}
 	return a.toIdentity(app), nil
+}
+
+// rememberOneTimeSecret buffers the freshly issued secret in process memory so
+// the control plane can deliver it to the configured Key Vault. It is cleared
+// on consumption and never placed into a protocol object, event, snapshot, or
+// log.
+func (a *AzureCloudAdapter) rememberOneTimeSecret(value, keyID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.oneTimeSecret = value
+	a.oneTimeKeyID = keyID
+}
+
+// ConsumeOneTimeSecret returns and clears the most recent one-time secret
+// created by Create or Rotate. The second call returns "".
+func (a *AzureCloudAdapter) ConsumeOneTimeSecret() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	value := a.oneTimeSecret
+	a.oneTimeSecret = ""
+	return value
 }
 
 // Retire decommissions a demo application by deleting it from the tenant. The
@@ -220,4 +265,33 @@ func (a *AzureCloudAdapter) toIdentity(app protocol.AzureApplication) protocol.M
 func azureFingerprint(objectID string) string {
 	sum := sha256.Sum256([]byte(objectID))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// --- CloudVault capability (Azure Key Vault delivery) ---
+
+// StoreSecret writes the identity's credential into the configured Key Vault
+// as a new secret version. It is refused when no vault is configured or the
+// identity sits outside the demo namespace.
+func (a *AzureCloudAdapter) StoreSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string) (protocol.VaultReference, error) {
+	if a.vault == nil {
+		return protocol.VaultReference{}, ErrVaultUnsupported
+	}
+	return a.vault.StoreSecret(ctx, identity, keyID, secret)
+}
+
+// ReadSecret retrieves the current (or pinned) version of the identity's
+// credential from the configured Key Vault.
+func (a *AzureCloudAdapter) ReadSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, version string) (string, protocol.VaultReference, error) {
+	if a.vault == nil {
+		return "", protocol.VaultReference{}, ErrVaultUnsupported
+	}
+	return a.vault.ReadSecret(ctx, identity, keyID, version)
+}
+
+// RevokeSecret disables the current version of the identity's vault secret.
+func (a *AzureCloudAdapter) RevokeSecret(ctx context.Context, identity protocol.MachineIdentity, keyID string) (protocol.VaultReference, error) {
+	if a.vault == nil {
+		return protocol.VaultReference{}, ErrVaultUnsupported
+	}
+	return a.vault.RevokeSecret(ctx, identity, keyID)
 }

@@ -145,7 +145,44 @@ type ProvisionResponse struct {
 	OneTimeSecret string          `json:"one_time_secret,omitempty"`
 	KeyID         string          `json:"key_id,omitempty"`
 	Instructions  string          `json:"instructions,omitempty"`
-	Error         *Error          `json:"error,omitempty"`
+	// Vault, when set, is the redacted reference of the vault secret that
+	// received the credential. It identifies the secret name and version in the
+	// selected provider-native vault; it never contains secret material.
+	Vault *VaultReference `json:"vault,omitempty"`
+	Error *Error          `json:"error,omitempty"`
+}
+
+// UseRequest asks the control plane to retrieve the current credential of one
+// governed identity from the selected provider-native vault. Every successful
+// use is audited as credential.used; the secret value is written only to the
+// single HTTP response and never persisted.
+type UseRequest struct {
+	ID          string `json:"id"`
+	RequestedBy string `json:"requested_by,omitempty"`
+	// Version optionally pins a specific vault secret version; empty means the
+	// current version.
+	Version string `json:"version,omitempty"`
+}
+
+// UseResponse returns the vault-retrieved credential once. Secret material is
+// never persisted by the control plane; audit trails record the vault
+// reference (name, version, key id) only.
+type UseResponse struct {
+	APIVersion string          `json:"api_version"`
+	Identity   MachineIdentity `json:"identity"`
+	KeyID      string          `json:"key_id,omitempty"`
+	Secret     string          `json:"secret,omitempty"`
+	Vault      *VaultReference `json:"vault,omitempty"`
+	Error      *Error          `json:"error,omitempty"`
+}
+
+// RequestedByOrDefault returns the actor that requested the use, defaulting to
+// the operator actor when none is supplied.
+func (r UseRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorOperator
 }
 
 // RequestedByOrDefault returns the actor that requested provisioning, defaulting

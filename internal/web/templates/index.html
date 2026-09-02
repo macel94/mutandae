@@ -32,6 +32,7 @@
           <p class="eyebrow">Machine identity control plane <span class="eyebrow-line"></span></p>
           <h1>Govern what<br><em>must change.</em></h1>
           <p class="hero-lede">A clear lifecycle for non-human identities. See ownership, expiry, renewal health, and the evidence behind every change.</p>
+          {{ if .Provision }}{{ template "new-identity" (newIdentity .Provision "provision-slot") }}{{ end }}
           <div class="pronunciation"><span class="pronunciation-label">Say it in Latin</span><strong>moo-TAHN-dye</strong><span class="pronunciation-note">mūtandae · final <i>ae</i> like “ai”</span></div>
         </div>
         <div class="hero-orbit" aria-hidden="true">
@@ -74,10 +75,14 @@
               <p class="section-kicker">Lifecycle inventory</p>
               <h2 id="inventory-title">Machine identities</h2>
             </div>
-            <button class="button button-secondary" type="button" hx-get="/partials/identities" hx-target="#identity-list" hx-swap="outerHTML">
-              <span class="button-icon">↻</span> Refresh
-            </button>
+            <div class="inventory-actions">
+              {{ if .Provision }}{{ template "new-identity" (newIdentity .Provision "provision-slot") }}{{ end }}
+              <button class="button button-secondary" type="button" hx-get="/partials/identities" hx-target="#identity-list" hx-swap="outerHTML">
+                <span class="button-icon">↻</span> Refresh
+              </button>
+            </div>
           </div>
+          <div id="provision-slot" class="provision-slot" aria-live="polite"></div>
           <div class="toolbar">
             <label class="search-box">
               <span class="sr-only">Search identities</span>

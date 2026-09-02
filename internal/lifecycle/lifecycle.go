@@ -238,6 +238,17 @@ func (s *Store) Provision(ctx context.Context, req protocol.ProvisionRequest, no
 		fmt.Sprintf("Registered %s into governance", identity.Name),
 		req.RequestedByOrDefault(), protocol.OutcomeSuccess, nil, "")
 	s.mu.Unlock()
+	// Deliver the freshly issued credential to the selected provider-native
+	// vault. The one-time response disclosure stays intact; the vault copy is
+	// what makes later, audited retrieval (Use) possible.
+	if ref := s.deliverToVault(ctx, identity, resp.KeyID, resp.OneTimeSecret, now); ref != nil {
+		resp.Vault = ref
+		identity.Metadata = withVaultMetadata(identity.Metadata, ref)
+		identity.UpdatedAt = now.UTC()
+		s.mu.Lock()
+		s.identities[identity.ID] = identity
+		s.mu.Unlock()
+	}
 	if err := s.persistLocked(ctx); err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
@@ -329,20 +340,23 @@ func registerRequestConforms(req protocol.RegisterRequest) error {
 // identity returns to active with attention health so a retry stays possible.
 func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now = now.UTC()
 
 	identity, ok := s.identities[req.ID]
 	if !ok {
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, ErrNotFound
 	}
 	if identity.State == protocol.StateRetired {
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, ErrAlreadyRetired
 	}
 	if identity.State == protocol.StateRenewing {
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, ErrRotationInProgress
 	}
 	if !protocol.CanTransition(identity.State, protocol.StateRenewing) {
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, fmt.Errorf("%w: %s -> renewing", ErrInvalidTransition, identity.State)
 	}
 
@@ -385,8 +399,10 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 			"Rotation failed at the provider: "+adapterErr.Error(), protocol.ActorProviderAdapter,
 			protocol.OutcomeFailure, nil, runID)
 		if persistErr := s.persistLocked(ctx); persistErr != nil {
+			s.mu.Unlock()
 			return protocol.RotateResponse{}, persistErr
 		}
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
 	}
 
@@ -410,11 +426,29 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		"New credential verified against provider state", protocol.ActorProviderAdapter,
 		protocol.OutcomeSuccess,
 		map[string]string{"key_id": identity.Credential.KeyID, "fingerprint": identity.Credential.Fingerprint}, runID)
+	s.mu.Unlock()
+	// Deliver the renewed credential to the vault as a new secret version so
+	// consumers of the old version can never be stranded. Failures surface as
+	// attention events and never roll back the completed rotation.
+	if issuer, ok := s.adapter.(OneTimeSecretor); ok {
+		if renewed := issuer.ConsumeOneTimeSecret(identity.Provider.Provider); renewed != "" {
+			if ref := s.deliverToVault(ctx, identity, identity.Credential.KeyID, renewed, now); ref != nil {
+				identity.Metadata = withVaultMetadata(identity.Metadata, ref)
+				identity.UpdatedAt = now
+				s.mu.Lock()
+				s.identities[identity.ID] = identity
+				s.mu.Unlock()
+			}
+		}
+	}
+	s.mu.Lock()
 	if err := s.persistLocked(ctx); err != nil {
+		s.mu.Unlock()
 		return protocol.RotateResponse{}, err
 	}
 
 	events := s.eventsSnapshotLocked(identity.ID)
+	s.mu.Unlock()
 	return protocol.RotateResponse{
 		APIVersion: protocol.Version, Identity: identity, Rotation: run, Events: events,
 	}, nil
@@ -428,23 +462,26 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 		return protocol.RetireResponse{}, ErrConfirmationNeeded
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now = now.UTC()
 
 	identity, ok := s.identities[req.ID]
 	if !ok {
+		s.mu.Unlock()
 		return protocol.RetireResponse{}, ErrNotFound
 	}
 	if identity.State == protocol.StateRetired {
+		s.mu.Unlock()
 		return protocol.RetireResponse{}, ErrAlreadyRetired
 	}
 	if !protocol.CanTransition(identity.State, protocol.StateRetired) {
+		s.mu.Unlock()
 		return protocol.RetireResponse{}, fmt.Errorf("%w: %s -> retired", ErrInvalidTransition, identity.State)
 	}
 
 	adapter := s.adapter
 	providerView, adapterErr := adapter.Retire(ctx, identity)
 	if adapterErr != nil {
+		s.mu.Unlock()
 		return protocol.RetireResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
 	}
 
@@ -458,15 +495,190 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 	s.addEvent(identity.ID, now, protocol.EventIdentityRetired,
 		"Retired "+identity.Name+" ("+req.Reason+")", operator, protocol.OutcomeSuccess, nil, "")
 	if err := s.persistLocked(ctx); err != nil {
+		s.mu.Unlock()
 		return protocol.RetireResponse{}, err
 	}
+	s.mu.Unlock()
+	// Best-effort vault revocation: retirement must not leave a usable copy of
+	// the credential in the selected vault. The provider identity is already
+	// decommissioned, so a vault failure surfaces as an attention event only.
+	if vault := s.vault(); vault != nil {
+		s.revokeFromVault(ctx, identity, operator, now)
+	}
 
+	s.mu.Lock()
 	events := s.eventsSnapshotLocked(identity.ID)
+	s.mu.Unlock()
 	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil
+}
+
+// revokeFromVault disables the vault copy of a retired credential and records
+// the credential.revoked audit event.
+func (s *Store) revokeFromVault(ctx context.Context, identity protocol.MachineIdentity, operator string, now time.Time) {
+	vault := s.vault()
+	if vault == nil {
+		return
+	}
+	now = now.UTC()
+	ref, err := vault.RevokeSecret(ctx, identity, identity.Credential.KeyID)
+	if err != nil {
+		s.mu.Lock()
+		s.addEvent(identity.ID, now, protocol.EventCredentialRevoked,
+			"Vault revocation failed: "+err.Error(), protocol.ActorProviderAdapter,
+			protocol.OutcomeAttention,
+			map[string]string{"key_id": identity.Credential.KeyID, "error": err.Error()}, "")
+		s.mu.Unlock()
+		return
+	}
+	details := map[string]string{
+		"key_id":        identity.Credential.KeyID,
+		"vault_secret":  ref.SecretName,
+		"vault_version": ref.Version,
+	}
+	if ref.URL != "" {
+		details["vault_url"] = ref.URL
+	}
+	s.mu.Lock()
+	s.addEvent(identity.ID, now, protocol.EventCredentialRevoked,
+		"Vault copy disabled in the "+providerVaultLabel(identity.Provider.Provider),
+		protocol.ActorProviderAdapter, protocol.OutcomeSuccess, details, "")
+	s.mu.Unlock()
+}
+
+// Use retrieves the current (or pinned) credential version of one governed
+// identity from the selected provider-native vault and audits the retrieval as
+// credential.used. The secret value is returned exactly once in the response
+// and never persisted; retired identities no longer have a retrievable
+// credential.
+func (s *Store) Use(ctx context.Context, req protocol.UseRequest, now time.Time) (protocol.UseResponse, error) {
+	identity, ok := s.Get(req.ID)
+	if !ok {
+		return protocol.UseResponse{}, ErrNotFound
+	}
+	if identity.State == protocol.StateRetired {
+		return protocol.UseResponse{}, ErrAlreadyRetired
+	}
+	vault := s.vault()
+	if vault == nil {
+		return protocol.UseResponse{}, ErrVaultUnsupported
+	}
+	value, ref, err := vault.ReadSecret(ctx, identity, identity.Credential.KeyID, req.Version)
+	if err != nil {
+		return protocol.UseResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
+	}
+	now = now.UTC()
+	details := map[string]string{
+		"key_id":        identity.Credential.KeyID,
+		"vault_secret":  ref.SecretName,
+		"vault_version": ref.Version,
+	}
+	if ref.URL != "" {
+		details["vault_url"] = ref.URL
+	}
+	s.mu.Lock()
+	s.addEvent(identity.ID, now, protocol.EventCredentialUsed,
+		"Credential retrieved from the "+providerVaultLabel(identity.Provider.Provider)+" by "+req.RequestedByOrDefault(),
+		req.RequestedByOrDefault(), protocol.OutcomeSuccess, details, "")
+	persistErr := s.persistLocked(ctx)
+	s.mu.Unlock()
+	if persistErr != nil {
+		return protocol.UseResponse{}, persistErr
+	}
+	return protocol.UseResponse{
+		APIVersion: protocol.Version,
+		Identity:   identity,
+		KeyID:      identity.Credential.KeyID,
+		Secret:     value,
+		Vault:      &ref,
+	}, nil
+}
+
+// withVaultMetadata records the vault location of the current credential on
+// the identity. Only names, URLs, and versions are stored — never secrets.
+func withVaultMetadata(metadata protocol.Metadata, ref *protocol.VaultReference) protocol.Metadata {
+	if ref == nil {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = protocol.Metadata{}
+	}
+	if ref.URL != "" {
+		metadata[metaVaultURL] = ref.URL
+	}
+	metadata[metaVaultSecret] = ref.SecretName
+	if ref.Version != "" {
+		metadata[metaVaultVersion] = ref.Version
+	}
+	return metadata
 }
 
 func (s *Store) eventsSnapshotLocked(id string) []protocol.LifecycleEvent {
 	return append([]protocol.LifecycleEvent(nil), s.events[id]...)
+}
+
+// vault returns the adapter's vault delivery capability, or nil when the
+// adapter cannot deliver credentials to a provider-native vault.
+func (s *Store) vault() VaultStore {
+	vault, _ := s.adapter.(VaultStore)
+	return vault
+}
+
+// vaultMetadataKeys are the provider-neutral identity metadata keys recording
+// where the current credential lives. They name the vault, secret, and
+// version — never secret material — so the inventory and API can display
+// vault state and consumers can pin versions.
+const (
+	metaVaultURL     = "vault_url"
+	metaVaultSecret  = "vault_secret"
+	metaVaultVersion = "vault_version"
+)
+
+// deliverToVault stores a freshly issued credential in the selected
+// provider-native vault, records the auditable credential.delivered event
+// (success or failure), and updates the identity's vault metadata. It never
+// fails the calling lifecycle operation: a vault outage is surfaced as an
+// attention event while the identity itself remains governed.
+func (s *Store) deliverToVault(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string, now time.Time) *protocol.VaultReference {
+	vault := s.vault()
+	if vault == nil || strings.TrimSpace(secret) == "" {
+		return nil
+	}
+	now = now.UTC()
+	ref, err := vault.StoreSecret(ctx, identity, keyID, secret)
+	if err != nil {
+		s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
+			"Vault delivery failed: the credential was issued but not stored in the "+providerVaultLabel(identity.Provider.Provider),
+			protocol.ActorProviderAdapter, protocol.OutcomeAttention,
+			map[string]string{"key_id": keyID, "error": err.Error(), "provider": identity.Provider.Provider}, "")
+		return nil
+	}
+	details := map[string]string{
+		"key_id":        keyID,
+		"vault_secret":  ref.SecretName,
+		"provider":      identity.Provider.Provider,
+		"vault_version": ref.Version,
+	}
+	if ref.URL != "" {
+		details["vault_url"] = ref.URL
+	}
+	s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
+		"Credential stored in the "+providerVaultLabel(identity.Provider.Provider)+" ("+ref.SecretName+"), retrievable on demand",
+		protocol.ActorProviderAdapter, protocol.OutcomeSuccess, details, "")
+	return &ref
+}
+
+// providerVaultLabel names the provider-native vault in audit summaries.
+func providerVaultLabel(provider string) string {
+	switch provider {
+	case "azure-entra":
+		return "Azure Key Vault"
+	case "aws-iam":
+		return "AWS Secrets Manager"
+	case "gcp-iam":
+		return "GCP Secret Manager"
+	default:
+		return "provider vault"
+	}
 }
 
 // Transition validates a lifecycle state change against the protocol's

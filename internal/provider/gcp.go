@@ -32,7 +32,10 @@ const (
 	gcpIAMScope = "https://www.googleapis.com/auth/cloud-platform"
 	gcpTokenURI = "https://oauth2.googleapis.com/token"
 	gcpIAMBase  = "https://iam.googleapis.com/v1"
-	gcpMaxKeys  = 10 // IAM hard ceiling for user-managed service account keys
+	// gcpSecretBase is the official Secret Manager API base used for vault
+	// delivery; tests override it through GCPAdapterConfig.SecretManagerBaseURL.
+	gcpSecretBase = "https://secretmanager.googleapis.com/v1"
+	gcpMaxKeys    = 10 // IAM hard ceiling for user-managed service account keys
 )
 
 // GCPAdapterConfig carries the connection material for a real GCP IAM adapter.
@@ -62,6 +65,14 @@ type GCPAdapterConfig struct {
 	// else. The live demo enables this so the governor and any other non-demo
 	// service account in the project are neither listed nor actionable.
 	DemoOnly bool
+	// SecretManager enables the vault delivery capability: provisioned and
+	// renewed demo credentials are stored as versions of a Secret Manager
+	// secret in the same project. The governor service account needs the
+	// least-privilege secretmanager roles documented in docs/live-demo.md.
+	SecretManager bool
+	// SecretManagerBaseURL overrides the Secret Manager API base (used by
+	// tests; default is the official https://secretmanager.googleapis.com/v1).
+	SecretManagerBaseURL string
 }
 
 type gcpServiceAccount struct {
@@ -93,15 +104,17 @@ type gcpServiceAccountKey struct {
 // immediate one-time handoff (ConsumeOneTimeSecret) and clears it when it is
 // consumed, on the next rotation, or on Close.
 type GCPAdapter struct {
-	projectID   string
-	region      string
-	clientEmail string
-	privateKey  *rsa.PrivateKey
-	tokenURI    string
-	iamBaseURL  string
-	httpClient  *http.Client
-	now         func() time.Time
-	demoOnly    bool
+	projectID     string
+	region        string
+	clientEmail   string
+	privateKey    *rsa.PrivateKey
+	tokenURI      string
+	iamBaseURL    string
+	secretBaseURL string
+	secretManager bool
+	httpClient    *http.Client
+	now           func() time.Time
+	demoOnly      bool
 
 	mu             sync.Mutex
 	accessToken    string
@@ -156,6 +169,10 @@ func NewGCPAdapter(cfg GCPAdapterConfig) (*GCPAdapter, error) {
 	if iamBaseURL == "" {
 		iamBaseURL = gcpIAMBase
 	}
+	secretBaseURL := strings.TrimSpace(cfg.SecretManagerBaseURL)
+	if secretBaseURL == "" {
+		secretBaseURL = gcpSecretBase
+	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -165,15 +182,17 @@ func NewGCPAdapter(cfg GCPAdapterConfig) (*GCPAdapter, error) {
 		now = time.Now
 	}
 	return &GCPAdapter{
-		projectID:   projectID,
-		region:      region,
-		clientEmail: keyFile.ClientEmail,
-		privateKey:  privateKey,
-		tokenURI:    tokenURI,
-		iamBaseURL:  strings.TrimSuffix(iamBaseURL, "/"),
-		httpClient:  httpClient,
-		now:         now,
-		demoOnly:    cfg.DemoOnly,
+		projectID:     projectID,
+		region:        region,
+		clientEmail:   keyFile.ClientEmail,
+		privateKey:    privateKey,
+		tokenURI:      tokenURI,
+		iamBaseURL:    strings.TrimSuffix(iamBaseURL, "/"),
+		secretBaseURL: strings.TrimSuffix(secretBaseURL, "/"),
+		secretManager: cfg.SecretManager,
+		httpClient:    httpClient,
+		now:           now,
+		demoOnly:      cfg.DemoOnly,
 	}, nil
 }
 

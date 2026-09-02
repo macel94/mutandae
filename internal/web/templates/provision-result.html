@@ -1,0 +1,38 @@
+{{ define "provision-result" }}
+<div class="provision-result panel" role="alert">
+  <p class="section-kicker">Real identity provisioned · zero permissions</p>
+  <h3>{{ .Identity.Name }} is live in {{ .Identity.Provider }}</h3>
+  <dl class="config-list credential-details">
+    <div><dt>Identity</dt><dd><code>{{ .Identity.Name }}</code></dd></div>
+    {{ if .KeyID }}<div><dt>Key ID</dt><dd><code>{{ .KeyID }}</code></dd></div>{{ end }}
+    <div><dt>Provider</dt><dd>{{ .Identity.Provider }}</dd></div>
+  </dl>
+  {{ if .Vault }}
+  <div class="vault-delivery">
+    <span class="vault-delivery-mark">✓</span>
+    <div>
+      <strong>Delivered to {{ .Identity.Provider }} vault — it is now viewable again, any time, under audit.</strong>
+      <p class="muted">The secret was written to <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }} in the provider's native vault. Use the ✦ action in the inventory to retrieve it; every retrieval is logged as <code>credential.used</code>.</p>
+    </div>
+  </div>
+  {{ else }}
+  <div class="vault-delivery vault-delivery-missed">
+    <span class="vault-delivery-mark">!</span>
+    <div>
+      <strong>No vault copy was stored for this credential.</strong>
+      <p class="muted">Vault delivery is not configured for this provider, or the vault write failed — check the audit trail. The one-time secret below is the only copy.</p>
+    </div>
+  </div>
+  {{ end }}
+  {{ if .Secret }}
+  <label class="secret-disclosure">
+    <span>One-time secret — copy it now{{ if .Vault }}; a vault copy keeps it retrievable{{ end }}</span>
+    <textarea readonly rows="6" onfocus="this.select()">{{ .Secret }}</textarea>
+  </label>
+  {{ end }}
+  <p class="muted">The control plane never stored this secret. The identity above requires you to attach permissions (which the demo cannot do) before it can do anything in the tenant. Renewal writes a fresh version to the same vault, and retirement disables the vault copy.</p>
+</div>
+<div id="identity-list" class="table-wrap" hx-swap-oob="true">
+  {{ template "identity-table" .Dashboard }}
+</div>
+{{ end }}

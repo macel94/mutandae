@@ -38,6 +38,7 @@ type LifecycleService interface {
 	Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error)
 	Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error)
 	Provision(ctx context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error)
+	Use(ctx context.Context, req protocol.UseRequest, now time.Time) (protocol.UseResponse, error)
 }
 
 // ConfigurationService supplies only the safe, read-only runtime view.
@@ -117,6 +118,15 @@ func newServer(deps Dependencies) (*Server, error) {
 				return "event-progress"
 			}
 		},
+		"shortVersion": func(version string) string {
+			if len(version) <= 12 {
+				return version
+			}
+			return version[:8] + "…"
+		},
+		"newIdentity": func(providers []providerSummary, target string) map[string]any {
+			return map[string]any{"Providers": providers, "Target": target}
+		},
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -169,6 +179,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
 	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
+	mux.HandleFunc("POST /identities/{id}/use", s.use)
 	mux.HandleFunc("POST /identities/provision", s.provision)
 	// Protocol JSON API (versioned).
 	mux.HandleFunc("GET /api/v1/", s.apiRoot)
@@ -178,6 +189,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/identities/{id}", s.apiInspect)
 	mux.HandleFunc("POST /api/v1/identities/{id}/rotations", s.apiRotate)
 	mux.HandleFunc("POST /api/v1/identities/{id}/retire", s.apiRetire)
+	mux.HandleFunc("POST /api/v1/identities/{id}/use", s.apiUse)
 	mux.HandleFunc("POST /api/v1/demo/identities", s.apiProvision)
 	// Health probes.
 	mux.HandleFunc("GET /livez", s.health)
@@ -249,25 +261,64 @@ func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
 }
 
 // provision creates a new zero-permission identity in a real tenant from the
-// dashboard, applying the per-provider quota and returning a fragment that
-// discloses the one-time secret exactly once along with the refreshed list.
+// dashboard or configuration page, applying the per-provider quota and
+// returning a fragment that discloses the one-time secret exactly once, reports
+// the vault delivery, and refreshes the inventory out-of-band. The provider is
+// accepted as a form field (new-identity dropdown) or query parameter.
 func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
-	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	provider := strings.TrimSpace(r.PostFormValue("provider"))
+	if provider == "" {
+		provider = strings.TrimSpace(r.URL.Query().Get("provider"))
+	}
 	if provider == "" {
 		s.writeError(w, errors.New("provider is required"), http.StatusBadRequest)
 		return
 	}
-	resp, err := s.provisionIdentity(r, provider, "")
+	resp, err := s.provisionIdentity(r, provider, r.PostFormValue("purpose"))
 	if err != nil {
 		s.writeError(w, err, http.StatusConflict)
+		return
+	}
+	// The dashboard posts into a dedicated slot; answer with the compact result
+	// fragment plus an out-of-band inventory refresh. The configuration page
+	// keeps receiving the full provision template.
+	if r.Header.Get("HX-Target") == "provision-slot" {
+		s.render(w, "provision-result", provisionResultView{
+			Identity:  toIdentityView(resp.Identity, s.now()),
+			KeyID:     resp.KeyID,
+			Secret:    resp.OneTimeSecret,
+			Vault:     resp.Vault,
+			Dashboard: s.dashboardView(),
+		})
 		return
 	}
 	s.render(w, "provision", provisionView{
 		Identity:     toIdentityView(resp.Identity, s.now()),
 		KeyID:        resp.KeyID,
 		Secret:       resp.OneTimeSecret,
+		Vault:        resp.Vault,
 		Instructions: resp.Instructions,
 		Dashboard:    s.dashboardView(),
+	})
+}
+
+// use retrieves the current credential of one identity from its selected
+// provider-native vault, auditing the retrieval, and renders the result into
+// the activity panel.
+func (s *Server) use(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.lifecycle.Use(r.Context(), protocol.UseRequest{
+		ID:          r.PathValue("id"),
+		RequestedBy: operatorOrDefault(r),
+	}, s.now())
+	if err != nil {
+		s.writeError(w, err, http.StatusConflict)
+		return
+	}
+	s.render(w, "use-result", useResultView{
+		Identity: toIdentityView(resp.Identity, s.now()),
+		KeyID:    resp.KeyID,
+		Secret:   resp.Secret,
+		Vault:    resp.Vault,
 	})
 }
 
@@ -565,6 +616,28 @@ func (s *Server) apiProvision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, resp)
+}
+
+func (s *Server) apiUse(w http.ResponseWriter, r *http.Request) {
+	var req protocol.UseRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+			return
+		}
+	}
+	req.ID = r.PathValue("id")
+	req.RequestedBy = operatorOrDefault(r)
+	resp, err := s.lifecycle.Use(r.Context(), req, s.now())
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, lifecycle.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		s.writeJSON(w, status, protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // provisionIdentity applies the per-provider demo quota (auto-reclaiming the
@@ -903,8 +976,29 @@ type provisionView struct {
 	Identity     identityView
 	KeyID        string
 	Secret       string
+	Vault        *protocol.VaultReference
 	Instructions string
 	Dashboard    dashboardView
+}
+
+// provisionResultView is the compact dashboard fragment for a fresh identity:
+// one-time secret, vault delivery status, and an out-of-band inventory refresh.
+type provisionResultView struct {
+	Identity  identityView
+	KeyID     string
+	Secret    string
+	Vault     *protocol.VaultReference
+	Dashboard dashboardView
+}
+
+// useResultView is the activity-panel fragment for a vault-backed credential
+// retrieval. It carries the secret value once; the audit trail records only
+// the vault reference.
+type useResultView struct {
+	Identity identityView
+	KeyID    string
+	Secret   string
+	Vault    *protocol.VaultReference
 }
 
 const demoPrefixWeb = "mutandae-demo-"
@@ -949,6 +1043,8 @@ type identityView struct {
 	ExpiryLabel      string
 	ExpiryRelative   string
 	LastRotatedLabel string
+	VaultLabel       string
+	VaultVersion     string
 	SearchText       string
 }
 
@@ -998,6 +1094,10 @@ func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityVi
 		}
 		base.ExpiryRelative = relative
 	}
+	// Vault state comes from provider-neutral identity metadata recorded at
+	// delivery time: names, URLs, and versions only — never secret material.
+	base.VaultLabel = vaultLabel(identity.Provider.Provider)
+	base.VaultVersion = identity.Metadata["vault_version"]
 	base.SearchText = strings.ToLower(strings.Join([]string{
 		identity.Name, base.Provider, identity.Environment, base.Owner, base.Workload, base.Criticality,
 	}, " "))
@@ -1017,6 +1117,21 @@ func providerLabel(kind string) string {
 			return "Unknown"
 		}
 		return kind
+	}
+}
+
+// providerVaultLabel names the native vault behind each provider kind so the
+// inventory and provision results can show where a credential lives.
+func vaultLabel(kind string) string {
+	switch kind {
+	case "azure-entra":
+		return "Key Vault"
+	case "aws-iam":
+		return "Secrets Manager"
+	case "gcp-iam":
+		return "Secret Manager"
+	default:
+		return "Vault"
 	}
 }
 

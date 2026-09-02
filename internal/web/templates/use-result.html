@@ -1,0 +1,28 @@
+{{ define "use-result" }}
+<div class="activity-content">
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Credential use · audited</p>
+      <h2>{{ .Identity.Name }}</h2>
+      <p class="muted">{{ .Identity.Owner }} · {{ .Identity.Workload }}</p>
+    </div>
+    <span class="badge badge-healthy"><span class="badge-dot"></span>Retrieved</span>
+  </div>
+  <div class="identity-summary">
+    <div><span>Provider</span><strong>{{ .Identity.Provider }}</strong></div>
+    <div><span>Vault</span><strong>{{ .Identity.VaultLabel }}</strong></div>
+    <div><span>Key ID</span><strong><code>{{ .KeyID }}</code></strong></div>
+  </div>
+  {{ if .Vault }}
+  <p class="muted">Retrieved from <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }}. This retrieval was logged as a <code>credential.used</code> lifecycle event with the vault reference and actor — check the audit trail.</p>
+  {{ end }}
+  {{ if .Secret }}
+  <label class="secret-disclosure">
+    <span>Credential from the vault — every retrieval is audited</span>
+    <textarea readonly rows="6" onfocus="this.select()">{{ .Secret }}</textarea>
+  </label>
+  {{ else }}
+  <p class="muted">The vault did not return a value. Check the audit trail for the delivery and use events.</p>
+  {{ end }}
+</div>
+{{ end }}

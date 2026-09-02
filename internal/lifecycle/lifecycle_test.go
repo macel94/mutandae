@@ -321,6 +321,7 @@ func (p *provisioningAdapter) Create(_ context.Context, provider, name string) (
 			Provider:    protocol.ProviderBinding{Provider: provider, ProviderID: "prov1"},
 			Ownership:   protocol.Ownership{Team: "Demo", Service: "mutandae-demo-ab12", Purpose: "Public demo identity with zero permissions"},
 			Policy:      protocol.LifecyclePolicy{RenewalPeriod: "P1D"},
+			Credential:  protocol.CredentialReference{Kind: "access_key", KeyID: "key-1", Location: "iam://account/user/mutandae-demo-ab12"},
 		},
 		OneTimeSecret: "top-secret",
 		KeyID:         "key-1",

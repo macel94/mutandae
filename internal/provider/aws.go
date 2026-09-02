@@ -55,6 +55,15 @@ type AWSAdapterConfig struct {
 	// are neither listed nor actionable, while the eval harness keeps the full
 	// provider view.
 	DemoOnly bool
+	// SecretsManager enables the vault delivery capability: provisioned and
+	// renewed demo credentials are stored as versions of a Secrets Manager
+	// secret in the same account/region. The governor principal needs the
+	// least-privilege secretsmanager permissions documented in
+	// docs/live-demo.md.
+	SecretsManager bool
+	// SecretsManagerEndpoint overrides the Secrets Manager endpoint (used by
+	// tests); the default is https://secretsmanager.<region>.amazonaws.com.
+	SecretsManagerEndpoint string
 }
 
 // AWSAdapter is a real AWS IAM adapter behind the CloudAdapter boundary. It
@@ -68,15 +77,17 @@ type AWSAdapterConfig struct {
 // consumed — it is never placed into a protocol object, event, snapshot, or
 // log.
 type AWSAdapter struct {
-	accountID    string
-	region       string
-	accessKeyID  string
-	secretKey    string
-	sessionToken string
-	endpoint     string
-	httpClient   *http.Client
-	now          func() time.Time
-	demoOnly     bool
+	accountID       string
+	region          string
+	accessKeyID     string
+	secretKey       string
+	sessionToken    string
+	endpoint        string
+	httpClient      *http.Client
+	now             func() time.Time
+	demoOnly        bool
+	secretsManager  bool
+	secretsEndpoint string
 
 	mu             sync.Mutex
 	oneTimeSecret  string
@@ -115,15 +126,17 @@ func NewAWSAdapter(cfg AWSAdapterConfig) (*AWSAdapter, error) {
 		now = time.Now
 	}
 	return &AWSAdapter{
-		accountID:    accountID,
-		region:       region,
-		accessKeyID:  accessKeyID,
-		secretKey:    cfg.SecretKey,
-		sessionToken: cfg.SessionToken,
-		endpoint:     endpoint,
-		httpClient:   httpClient,
-		now:          now,
-		demoOnly:     cfg.DemoOnly,
+		accountID:       accountID,
+		region:          region,
+		accessKeyID:     accessKeyID,
+		secretKey:       cfg.SecretKey,
+		sessionToken:    cfg.SessionToken,
+		endpoint:        endpoint,
+		httpClient:      httpClient,
+		now:             now,
+		demoOnly:        cfg.DemoOnly,
+		secretsManager:  cfg.SecretsManager,
+		secretsEndpoint: strings.TrimSpace(cfg.SecretsManagerEndpoint),
 	}, nil
 }
 

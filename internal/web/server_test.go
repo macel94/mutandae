@@ -430,3 +430,17 @@ func (f *fakeLifecycle) Provision(_ context.Context, req protocol.ProvisionReque
 		KeyID:         "key-1",
 	}, nil
 }
+
+func (f *fakeLifecycle) Use(_ context.Context, req protocol.UseRequest, now time.Time) (protocol.UseResponse, error) {
+	identity, ok := f.Get(req.ID)
+	if !ok {
+		return protocol.UseResponse{}, lifecycle.ErrNotFound
+	}
+	return protocol.UseResponse{
+		APIVersion: protocol.Version,
+		Identity:   identity,
+		KeyID:      "key-1",
+		Secret:     "demo-secret",
+		Vault:      &protocol.VaultReference{URL: "https://vault.example.net", SecretName: "mutandae-demo-abc1", Version: "v3"},
+	}, nil
+}

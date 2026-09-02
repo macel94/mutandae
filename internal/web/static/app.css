@@ -292,3 +292,33 @@ kbd { position: absolute; right: 8px; padding: 1px 5px; border: 1px solid var(--
 }
 .credential-details { margin-bottom: 4px; }
 .provision-action-row { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+
+/* --- New identity control (button + type dropdown) --- */
+.new-identity { display: inline-flex; align-items: center; gap: 10px; }
+.new-identity-label { color: var(--ink-faint); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+.new-identity-select {
+  appearance: none; padding: 9px 32px 9px 12px; border: 1px solid var(--line-strong); border-radius: 9px;
+  background-color: var(--panel); color: var(--ink); font-weight: 600; font-size: 13px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%), linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 55%, calc(100% - 12px) 55%;
+  background-size: 5px 5px; background-repeat: no-repeat; cursor: pointer;
+}
+.new-identity-select:hover { border-color: var(--cinnabar); }
+.new-identity-select:focus-visible { outline: 2px solid var(--cinnabar); outline-offset: 1px; }
+.hero .new-identity { margin: 4px 0 24px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .6); box-shadow: var(--shadow); }
+.inventory-actions { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.provision-slot:empty { display: none; }
+.provision-slot { margin: 0 26px 4px; }
+.provision-slot .provision-result { margin-bottom: 4px; }
+
+/* --- Vault delivery status --- */
+.vault-delivery { display: flex; gap: 12px; align-items: flex-start; margin: 16px 0; padding: 13px 15px; border: 1px solid var(--teal); border-radius: 11px; background: var(--teal-wash); }
+.vault-delivery-mark { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 99px; background: var(--teal); color: #fff; font-weight: 800; }
+.vault-delivery p { margin: 4px 0 0; font-size: 12.5px; }
+.vault-delivery-missed { border-color: var(--amber); background: var(--amber-wash); }
+.vault-delivery-missed .vault-delivery-mark { background: var(--amber); }
+.vault-cell .provider { display: inline-flex; align-items: center; gap: 8px; }
+.vault-cell small { display: block; color: var(--ink-faint); }
+.vault-mark { background: var(--teal-wash); color: var(--teal); border: 1px solid var(--teal); }
+.vault-none { color: var(--ink-faint); }
+.secret-disclosure textarea { width: 100%; margin-top: 7px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--slate-wash); color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }

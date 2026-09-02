@@ -1,36 +1,45 @@
+{{ define "identity-table" }}
+<table class="identity-table">
+  <thead>
+    <tr>
+      <th>Identity</th>
+      <th>Owner / workload</th>
+      <th>Provider</th>
+      <th>Vault</th>
+      <th>Expiry</th>
+      <th>Status</th>
+      <th><span class="sr-only">Actions</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{ range .Identities }}
+    <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}" x-show="(!filter || $el.dataset.search.includes(filter.toLowerCase())) &amp;&amp; (status === 'all' || (status === 'attention' ? ['expiring', 'overdue'].includes($el.dataset.urgency) : $el.dataset.urgency === status))">
+      <td>
+        <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span><strong>{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
+      </td>
+      <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
+      <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
+      <td class="vault-cell">
+        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else }}<span class="vault-none">—</span>{{ end }}
+      </td>
+      <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
+      <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
+      <td class="actions-cell">
+        <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#activity-panel" hx-swap="innerHTML">↗</button>
+        {{ if ne .State "retired" }}{{ if .VaultVersion }}<button class="icon-button" type="button" title="Use — retrieve the credential from {{ .VaultLabel }} (audited)" aria-label="Use {{ .Name }} — retrieve from vault" hx-post="/identities/{{ .ID }}/use" hx-target="#activity-panel" hx-swap="innerHTML">✦</button>{{ end }}{{ end }}
+        {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
+        {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance and disables its vault copy.">Retire</button>{{ end }}
+      </td>
+    </tr>
+    {{ else }}
+    <tr><td class="empty-row" colspan="7">No identities match this view. Create one with the New identity button above.</td></tr>
+    {{ end }}
+  </tbody>
+</table>
+{{ end }}
+
 {{ define "identity-list" }}
 <div id="identity-list" class="table-wrap">
-  <table class="identity-table">
-    <thead>
-      <tr>
-        <th>Identity</th>
-        <th>Owner / workload</th>
-        <th>Provider</th>
-        <th>Expiry</th>
-        <th>Status</th>
-        <th><span class="sr-only">Actions</span></th>
-      </tr>
-    </thead>
-    <tbody>
-      {{ range .Identities }}
-      <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}" x-show="(!filter || $el.dataset.search.includes(filter.toLowerCase())) &amp;&amp; (status === 'all' || (status === 'attention' ? ['expiring', 'overdue'].includes($el.dataset.urgency) : $el.dataset.urgency === status))">
-        <td>
-          <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span><strong>{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
-        </td>
-        <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
-        <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
-        <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
-        <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
-        <td class="actions-cell">
-          <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#activity-panel" hx-swap="innerHTML">↗</button>
-          {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
-          {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance.">Retire</button>{{ end }}
-        </td>
-      </tr>
-      {{ else }}
-      <tr><td class="empty-row" colspan="6">No identities match this view.</td></tr>
-      {{ end }}
-    </tbody>
-  </table>
+  {{ template "identity-table" . }}
 </div>
 {{ end }}

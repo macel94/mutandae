@@ -1,5 +1,5 @@
 {{ define "provision" }}
-<div id="identity-list" class="provision-result-wrap">
+<div class="provision-result-wrap">
   <div class="provision-result panel" role="alert">
     <p class="section-kicker">Real identity provisioned · zero permissions</p>
     <h3>Here is your one-time credential for {{ .Identity.Provider }}</h3>
@@ -11,9 +11,18 @@
     </dl>
     {{ if .Secret }}
     <label class="secret-disclosure">
-      <span>One-time secret — copy it now, it will never be shown again</span>
+      <span>One-time secret — copy it now{{ if .Vault }}; a vault copy keeps it retrievable{{ end }}</span>
       <textarea readonly rows="6" onfocus="this.select()">{{ .Secret }}</textarea>
     </label>
+    {{ end }}
+    {{ if .Vault }}
+    <div class="vault-delivery">
+      <span class="vault-delivery-mark">✓</span>
+      <div>
+        <strong>Delivered to {{ .Identity.Provider }} vault — viewable again any time, under audit.</strong>
+        <p class="muted">Stored as <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }}. Every use and renewal is a logged lifecycle event.</p>
+      </div>
+    </div>
     {{ end }}
     <p class="muted">The control plane never stored this secret. The identity above requires you to attach permissions (which the demo cannot do) before it can do anything in the tenant. Return to the dashboard to rotate or retire it.</p>
   </div>

@@ -41,15 +41,23 @@ func main() {
 	// credential set is a hard error: the public site must never silently fall
 	// back to a simulator that pretends to be a real tenant. In preview/local
 	// mode the simulator stays available for development and tests.
-	azureAdapter, azureLabel, azureReal, err := wireAzureAdapter(now)
+	// Vault delivery: when enabled (MUTANDAE_VAULT != "off"), provisioned and
+	// renewed demo credentials are delivered to the provider's native vault —
+	// AWS Secrets Manager, GCP Secret Manager, and Azure Key Vault (the latter
+	// requires AZURE_KEY_VAULT_URL plus the documented Key Vault role).
+	vaultEnabled := !strings.EqualFold(envString("MUTANDAE_VAULT", "auto"), "off")
+	azureVaultURL := envString("AZURE_KEY_VAULT_URL", "")
+	azureVaultPrefix := envString("AZURE_KEY_VAULT_PREFIX", "mutandae")
+
+	azureAdapter, azureLabel, azureReal, err := wireAzureAdapter(now, azureVaultURL, azureVaultPrefix, vaultEnabled)
 	if err != nil {
 		log.Fatalf("wire Azure adapter: %v", err)
 	}
-	awsAdapter, awsLabel, awsReal, err := wireAWSAdapter(now, awsAccountID, awsRegion)
+	awsAdapter, awsLabel, awsReal, err := wireAWSAdapter(now, awsAccountID, awsRegion, vaultEnabled)
 	if err != nil {
 		log.Fatalf("wire AWS adapter: %v", err)
 	}
-	gcpAdapter, gcpLabel, gcpReal, err := wireGCPAdapter(now, gcpProjectID, gcpRegion)
+	gcpAdapter, gcpLabel, gcpReal, err := wireGCPAdapter(now, gcpProjectID, gcpRegion, vaultEnabled)
 	if err != nil {
 		log.Fatalf("wire GCP adapter: %v", err)
 	}
@@ -57,12 +65,21 @@ func main() {
 	provisionFeatures := []string{}
 	if azureReal {
 		provisionFeatures = append(provisionFeatures, "provision:azure-entra")
+		if azureVaultURL != "" && vaultEnabled {
+			provisionFeatures = append(provisionFeatures, "vault:azure-entra")
+		}
 	}
 	if awsReal {
 		provisionFeatures = append(provisionFeatures, "provision:aws-iam")
+		if vaultEnabled {
+			provisionFeatures = append(provisionFeatures, "vault:aws-iam")
+		}
 	}
 	if gcpReal {
 		provisionFeatures = append(provisionFeatures, "provision:gcp-iam")
+		if vaultEnabled {
+			provisionFeatures = append(provisionFeatures, "vault:gcp-iam")
+		}
 	}
 
 	adapter, err := provider.NewMultiProvider(
@@ -205,7 +222,7 @@ func envFloat(name string, fallback float64) float64 {
 // simulator otherwise. The returned label describes what is wired for the
 // configuration page without revealing any secret, and real reports whether a
 // live tenant is governed (which also enables provisioning).
-func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion string) (provider.CloudAdapter, string, bool, error) {
+func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion string, vaultEnabled bool) (provider.CloudAdapter, string, bool, error) {
 	accountID := envString("AWS_ACCOUNT_ID", fallbackAccountID)
 	accessKeyID := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
 	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
@@ -216,13 +233,14 @@ func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion stri
 		return provider.NewAWSSimulator(accountID, envString("AWS_REGION", fallbackRegion), now()), "simulated", false, nil
 	}
 	adapter, err := provider.NewAWSAdapter(provider.AWSAdapterConfig{
-		AccountID:    accountID,
-		Region:       envString("AWS_REGION", fallbackRegion),
-		AccessKeyID:  accessKeyID,
-		SecretKey:    secretKey,
-		SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
-		Now:          now,
-		DemoOnly:     true, // live demo governs only mutandae-demo-* identities
+		AccountID:      accountID,
+		Region:         envString("AWS_REGION", fallbackRegion),
+		AccessKeyID:    accessKeyID,
+		SecretKey:      secretKey,
+		SessionToken:   os.Getenv("AWS_SESSION_TOKEN"),
+		Now:            now,
+		DemoOnly:       true, // live demo governs only mutandae-demo-* identities
+		SecretsManager: vaultEnabled,
 	})
 	if err != nil {
 		return nil, "", false, err
@@ -233,7 +251,7 @@ func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion stri
 // wireGCPAdapter returns a real GCP IAM adapter when
 // GCP_SERVICE_ACCOUNT_KEY_JSON (or GCP_SERVICE_ACCOUNT_KEY_FILE) is present,
 // and the public simulator otherwise.
-func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion string) (provider.CloudAdapter, string, bool, error) {
+func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion string, vaultEnabled bool) (provider.CloudAdapter, string, bool, error) {
 	projectID := envString("GCP_PROJECT_ID", fallbackProjectID)
 	keyJSON, keyErr := gcpKeyJSON()
 	if keyErr != nil {
@@ -246,11 +264,12 @@ func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion stri
 		return provider.NewGCPSimulator(projectID, envString("GCP_REGION", fallbackRegion), now()), "simulated", false, nil
 	}
 	adapter, err := provider.NewGCPAdapter(provider.GCPAdapterConfig{
-		ProjectID: projectID,
-		Region:    envString("GCP_REGION", fallbackRegion),
-		KeyJSON:   keyJSON,
-		Now:       now,
-		DemoOnly:  true, // live demo governs only mutandae-demo-* identities
+		ProjectID:     projectID,
+		Region:        envString("GCP_REGION", fallbackRegion),
+		KeyJSON:       keyJSON,
+		Now:           now,
+		DemoOnly:      true, // live demo governs only mutandae-demo-* identities
+		SecretManager: vaultEnabled,
 	})
 	if err != nil {
 		return nil, "", false, err
@@ -260,8 +279,9 @@ func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion stri
 
 // wireAzureAdapter returns a real Azure / Entra Graph adapter when
 // AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET are present, and the
-// public simulator otherwise.
-func wireAzureAdapter(now func() time.Time) (provider.CloudAdapter, string, bool, error) {
+// public simulator otherwise. When vaultURL is set (and enabled), the adapter
+// additionally delivers credentials to that existing Key Vault.
+func wireAzureAdapter(now func() time.Time, vaultURL, vaultPrefix string, vaultEnabled bool) (provider.CloudAdapter, string, bool, error) {
 	tenantID := strings.TrimSpace(os.Getenv("AZURE_TENANT_ID"))
 	clientID := strings.TrimSpace(os.Getenv("AZURE_CLIENT_ID"))
 	clientSecret := os.Getenv("AZURE_CLIENT_SECRET")
@@ -271,12 +291,17 @@ func wireAzureAdapter(now func() time.Time) (provider.CloudAdapter, string, bool
 		}
 		return provider.NewSimulator(envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo"), now()), "simulated", false, nil
 	}
-	adapter, err := provider.NewAzureCloudAdapter(provider.AzureCloudAdapterConfig{
-		TenantID:     tenantID,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Now:          now,
-	})
+	cfg := provider.AzureCloudAdapterConfig{
+		TenantID:          tenantID,
+		ClientID:          clientID,
+		ClientSecret:      clientSecret,
+		Now:               now,
+		VaultSecretPrefix: vaultPrefix,
+	}
+	if vaultEnabled {
+		cfg.VaultURL = vaultURL
+	}
+	adapter, err := provider.NewAzureCloudAdapter(cfg)
 	if err != nil {
 		return nil, "", false, err
 	}

@@ -33,17 +33,8 @@
       <section class="panel config-card" aria-labelledby="provision-title">
         <p class="section-kicker">Live demo · create a real identity</p>
         <h2 id="provision-title">Create a zero-permission identity in a real tenant</h2>
-        <p class="muted">The server holds least-privilege credentials for the demo tenants below. Creating an identity there is safe and costs nothing: the result has <strong>no permissions</strong> — no AWS policy, no GCP role, no Azure API permission or admin consent — so it cannot do anything until you (outside the demo) grant it access. Each visitor may create a few; the demo auto-reclaims the oldest at its quota and throttles requests per client.</p>
-        <div class="provision-grid">
-          {{ range .Provision }}
-          <form class="provision-card" method="post" action="/identities/provision">
-            <input type="hidden" name="provider" value="{{ .Kind }}">
-            <span class="provider"><span class="provider-mark">{{ .Mark }}</span>{{ .Label }}</span>
-            <p class="muted">{{ .Scope }}</p>
-            <button class="button button-primary" type="submit" hx-post="/identities/provision?provider={{ .Kind }}" hx-target="#provision-target" hx-swap="innerHTML" hx-disable-elt="this">Create demo identity</button>
-          </form>
-          {{ end }}
-        </div>
+        <p class="muted">Pick the identity type and press <strong>New identity</strong>: the identity is created for real in that cloud's tenant with <strong>no permissions</strong> — no AWS policy, no GCP role, no Azure API permission or admin consent — and the secret is delivered straight into that cloud's native vault (Azure Key Vault, AWS Secrets Manager, or GCP Secret Manager). You can retrieve it again any time; every use and renewal is logged. The demo auto-reclaims the oldest identity at its quota and throttles requests per client.</p>
+        {{ template "new-identity" (newIdentity .Provision "provision-target") }}
         <div id="provision-target" class="provision-target"></div>
       </section>
       {{ end }}

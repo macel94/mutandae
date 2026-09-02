@@ -53,6 +53,27 @@ type Provisioner interface {
 	Create(ctx context.Context, provider, name string) (protocol.ProvisionResponse, error)
 }
 
+// VaultStore is the optional vault delivery capability of an Adapter: it
+// stores, retrieves, and revokes credential material in the provider's native
+// vault (Azure Key Vault, AWS Secrets Manager, GCP Secret Manager). The
+// control plane consumes it so provision/renew/use/retire stay auditable
+// lifecycle events regardless of which cloud the secret lands in.
+type VaultStore interface {
+	StoreSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string) (protocol.VaultReference, error)
+	ReadSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, version string) (string, protocol.VaultReference, error)
+	RevokeSecret(ctx context.Context, identity protocol.MachineIdentity, keyID string) (protocol.VaultReference, error)
+}
+
+// OneTimeSecretor exposes the most recent provider-issued secret so the
+// control plane can deliver a renewed credential to the vault.
+type OneTimeSecretor interface {
+	ConsumeOneTimeSecret(provider string) string
+}
+
+// ErrVaultUnsupported is returned when an operation needs a vault but the
+// adapter has none configured.
+var ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
+
 // ErrorCode translates a lifecycle error to the closest protocol ErrorCode so
 // handlers can emit a conformant failure envelope.
 func ErrorCode(err error) protocol.ErrorCode {
