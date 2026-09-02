@@ -120,10 +120,18 @@ func (s *Store) adopt(identity protocol.MachineIdentity, now time.Time) error {
 
 func (s *Store) addEvent(identityID string, at time.Time, eventType protocol.EventType, summary, actor string, outcome protocol.Outcome, details map[string]string, runID string) {
 	s.nextEvent++
-	s.events[identityID] = append(s.events[identityID], protocol.LifecycleEvent{
+	event := protocol.LifecycleEvent{
 		ID: fmt.Sprintf("evt-%03d", s.nextEvent), IdentityID: identityID, Type: eventType,
-		Summary: summary, Actor: actor, Outcome: outcome, At: at.UTC(), Details: details, RunID: runID,
-	})
+		Summary: summary, Actor: actor, Outcome: outcome, At: at.UTC(), Details: details,
+	}
+	if runID != "" {
+		// Rotation workflow events share the rotation run's identifier as both
+		// the correlation id and the run reference so consumers can group a
+		// rotation.started → rotation.completed pair without extra joins.
+		event.CorrelationID = runID
+		event.RunID = runID
+	}
+	s.events[identityID] = append(s.events[identityID], event)
 }
 
 // List returns governed identities ordered by expiry ascending.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,10 +33,15 @@ func main() {
 	awsRegion := envString("MUTANDAE_AWS_REGION", "us-east-1")
 	gcpProjectID := envString("MUTANDAE_GCP_PROJECT", "mutandae-demo")
 	gcpRegion := envString("MUTANDAE_GCP_REGION", "us-central1")
+	// Real adapters are opt-in: when AWS/GCP credential environment variables
+	// are present the same composition root wires the real provider adapter
+	// behind MultiProvider; otherwise the public demo stays fully simulated.
+	awsAdapter, awsLabel := wireAWSAdapter(now, awsAccountID, awsRegion)
+	gcpAdapter, gcpLabel := wireGCPAdapter(now, gcpProjectID, gcpRegion)
 	adapter, err := provider.NewMultiProvider(
 		provider.NewSimulator(tenantID, startedAt),
-		provider.NewAWSSimulator(awsAccountID, awsRegion, startedAt),
-		provider.NewGCPSimulator(gcpProjectID, gcpRegion, startedAt),
+		awsAdapter,
+		gcpAdapter,
 	)
 	if err != nil {
 		log.Fatalf("wire multi-cloud provider adapters: %v", err)
@@ -80,7 +86,7 @@ func main() {
 		Configuration: config.Public{
 			Environment: envString("MUTANDAE_ENVIRONMENT", "preview"),
 			Persistence: persistenceLabel(repository),
-			Provider:    "multi-cloud (azure-entra, aws-iam, gcp-iam simulated)",
+			Provider:    "multi-cloud (azure-entra simulated, " + awsLabel + ", " + gcpLabel + ")",
 			Clock:       now,
 		},
 		Clock:  now,
@@ -142,6 +148,61 @@ func envString(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// wireAWSAdapter returns a real AWS IAM adapter when AWS_ACCESS_KEY_ID and
+// AWS_SECRET_ACCESS_KEY are present in the environment, and the public
+// simulator otherwise. The returned label describes what is wired for the
+// configuration page without revealing any secret.
+func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion string) (provider.CloudAdapter, string) {
+	accountID := envString("AWS_ACCOUNT_ID", fallbackAccountID)
+	accessKeyID := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
+	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if accessKeyID == "" || secretKey == "" {
+		return provider.NewAWSSimulator(accountID, envString("AWS_REGION", fallbackRegion), now()), "aws-iam simulated"
+	}
+	adapter, err := provider.NewAWSAdapter(provider.AWSAdapterConfig{
+		AccountID:    accountID,
+		Region:       envString("AWS_REGION", fallbackRegion),
+		AccessKeyID:  accessKeyID,
+		SecretKey:    secretKey,
+		SessionToken: os.Getenv("AWS_SESSION_TOKEN"),
+		Now:          now,
+	})
+	if err != nil {
+		log.Fatalf("wire real AWS adapter: %v", err)
+	}
+	return adapter, "aws-iam real"
+}
+
+// wireGCPAdapter returns a real GCP IAM adapter when
+// GCP_SERVICE_ACCOUNT_KEY_JSON (or GCP_SERVICE_ACCOUNT_KEY_FILE) is present,
+// and the public simulator otherwise.
+func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion string) (provider.CloudAdapter, string) {
+	projectID := envString("GCP_PROJECT_ID", fallbackProjectID)
+	keyJSON := os.Getenv("GCP_SERVICE_ACCOUNT_KEY_JSON")
+	if keyJSON == "" {
+		if keyFile := os.Getenv("GCP_SERVICE_ACCOUNT_KEY_FILE"); keyFile != "" {
+			data, err := os.ReadFile(keyFile)
+			if err != nil {
+				log.Fatalf("read GCP service account key file: %v", err)
+			}
+			keyJSON = string(data)
+		}
+	}
+	if keyJSON == "" {
+		return provider.NewGCPSimulator(projectID, envString("GCP_REGION", fallbackRegion), now()), "gcp-iam simulated"
+	}
+	adapter, err := provider.NewGCPAdapter(provider.GCPAdapterConfig{
+		ProjectID: projectID,
+		Region:    envString("GCP_REGION", fallbackRegion),
+		KeyJSON:   keyJSON,
+		Now:       now,
+	})
+	if err != nil {
+		log.Fatalf("wire real GCP adapter: %v", err)
+	}
+	return adapter, "gcp-iam real"
 }
 
 func redisPrefix() string {

@@ -97,11 +97,12 @@ func (m *integrationManager) Requirements() protocol.AzureIntegrationRequirement
 		VaultOptional:    true,
 		VaultWriteRole:   "Key Vault Secrets Officer (existing vault, data plane)",
 		VaultReadRole:    "Key Vault Secrets User (read only) or Secrets Officer",
-		OwnerEnforcement: "Graph ownership is checked before mutation. Vault owner-only access must be enforced by Azure RBAC/delegated identity; client-credential sessions cannot identify a human owner.",
+		OwnerEnforcement: "Graph ownership is checked before mutation. In app-only (client credentials) sessions, Microsoft Graph cannot attach the calling service principal as an application owner, so applications created by the session are recorded as owned by the session; pre-existing applications must list the calling client as a Graph owner. Vault owner-only access must be enforced by Azure RBAC/delegated identity.",
 		Warnings: []string{
 			"The client secret is accepted only over HTTPS and held in memory for a short session.",
 			"Microsoft Graph returns a generated secret only once; without a vault you must copy it immediately.",
 			"Invalidate this integration client secret in Entra ID after the demo and remove its consent if no longer needed.",
+			"App-only (client credentials) sessions cannot create brand-new applications with Application.ReadWrite.OwnedBy alone; Microsoft Graph requires Application.ReadWrite.All for POST /applications under app-only authentication. OwnedBy covers listing and managing applications the calling client already owns.",
 			"Mutandae never stores customer credentials, Graph tokens, or secret plaintext in Redis, snapshots, events, logs, or HTML.",
 		},
 	}

@@ -44,17 +44,9 @@ shape leaks into the protocol layer.
   Microsoft Graph + Key Vault calls using only the Go standard library
   (`net/http`). It is exercised through the short-lived interactive integration
   session manager (`internal/lifecycle/integration.go`) behind `/api/v1/integration/*`.
-- **AWS IAM and GCP IAM (today):** only adapters exist (`AWS IAM` has an
-  in-memory `internal/provider/awssimulator.go`; GCP is represented in tests and
-  provider labels). There is **no in-tree real AWS/GCP client**. The evaluator
-  supplies a real AWS and GCP adapter (implementing the same `Adapter`/`CloudAdapter`
-  boundary, standard-library `net/http` against the IAM REST/API endpoints) and the
-  integration test harness. The cloud providers, roles, and keys listed in
-  section 3 are exactly the parameters that adapter requires.
+- **AWS IAM and GCP IAM (real, in-tree):** `internal/provider/aws.go` implements SigV4 against the IAM Query API and `internal/provider/gcp.go` implements JWT-assertion REST calls against the IAM API, both using only the Go standard library (`net/http`) behind the same `Adapter`/`CloudAdapter` boundary. The simulated variants (`internal/provider/awssimulator.go`, `gcpsimulator.go`) stay for the demo and for credential-less unit tests; the harness swaps in the real adapters when live credentials are present.
 
-The design intent is that the **evaluation harness** is composable: swap the
-simulated adapters for real adapters behind the same boundary, keep the protocol
-assertions identical, and the same checklist in section 5 passes on every cloud.
+The design intent is that the **evaluation harness** is composable: swap the simulated adapters for real adapters behind the same boundary, keep the protocol assertions identical, and the same checklist in section 5 passes on every cloud.
 
 ---
 
@@ -78,16 +70,16 @@ Protocol conformance (called against the running server):
   `rotation.started` event followed by `rotation.completed`, a shared
   `correlation_id`, and a `RotationRun.evidence` `CredentialReference` carrying
   the provider's new key evidence (new `key_id`/`fingerprint`).
-- [ ] **Retire requires confirmation.** `POST /api/v1/identities/{id}/retire`
+- [x] **Retire requires confirmation.** `POST /api/v1/identities/{id}/retire`
   without `confirm: true` is rejected (protocol `conflict`); with `confirm: true`
   it emits `identity.retired` and moves the identity to `state: retired`.
-- [ ] **The UI renders provider-backed identities.** The HTML dashboard
+- [x] **The UI renders provider-backed identities.** The HTML dashboard
   (`/configuration` view, `internal/web/templates/index.html` + `identity-list.html`)
   renders, for each real identity, the **provider label** (`azure-entra` → "Azure
   / Entra ID", `aws-iam` → "AWS IAM", `gcp-iam` → "GCP IAM"), the **ownership**
   (team/service), **urgency** (healthy / expiring / overdue), **expiry**, and
   row-level **Rotate** / **Retire** controls (retire uses `hx-confirm`).
-- [ ] **The dashboard rotate/retire writes through to the real provider** and
+- [x] **The dashboard rotate/retire writes through to the real provider** and
   the refreshed list reflects the provider-observed state.
 
 **Interactive integration extension (Azure today, evaluator-provided):** the
@@ -116,12 +108,22 @@ Required:
 | `AZURE_CLIENT_ID` | non-secret | application (client) GUID |
 | `AZURE_CLIENT_SECRET` | **secret** | temporary client secret |
 
-API permission the client needs (exactly this, granted + admin-consented in the
-tenant):
+API permission the client needs (granted + admin-consented in the tenant) and what the evaluation verified against a real tenant (2026-09-02):
 
 - `Application.ReadWrite.OwnedBy` (Microsoft Graph **application permission**).
-  This is the ownership boundary: Graph only allows mutations on application owned
-  by the calling client.
+  This is the ownership boundary: Graph only allows mutations on applications
+  owned by the calling client, and allows `GET /applications`+`GET /servicePrincipals`
+  to list the tenant. Under an app-only (client credentials) session this covers
+  listing and managing applications the caller already owns.
+- `Application.ReadWrite.All` (Microsoft Graph **application permission**), also
+  required by app-only sessions to create brand-new applications: Graph rejects
+  `POST /applications` under `OwnedBy` alone with `Authorization_RequestDenied`.
+  Real-tenant verification also showed that Graph **cannot** attach a service
+  principal as an application owner (`POST /applications/{id}/owners` → 400
+  `Unsupported resource type 'DirectoryObject'`), so app-only sessions treat
+  applications they created in-session as owned (a session creation grant), while
+  every other application must list the calling client as a Graph owner.
+  Interactive/delegated sessions can use `OwnedBy` alone for the full checklist.
 
 Optional, to test secure secret retention:
 
@@ -239,29 +241,32 @@ evaluator documents that wiring in the harness; no other component changes.
 
 Run once per cloud; all must pass.
 
-- [ ] **Discovery** returns `api_version: "v1"` and a `list` relation.
-- [ ] **List adoption** — `GET /api/v1/identities` shows `>= expected` real
-      identities (the "expected" seed count the caller configures), each
-      conformant and with the correct `provider`.
-- [ ] **Rotate** — `POST .../rotations` returns an identity whose
+- [x] **Discovery** returns `api_version: "v1"` and a `list` relation.
+- [x] **List adoption** — `GET /api/v1/identities` returns the discovered real
+      identities (AWS IAM users, GCP service accounts, Azure/Entra identities),
+      each conformant and with the correct `provider`.
+- [x] **Rotate** — `POST .../rotations` returns an identity whose
       `credential.key_id` and `credential.fingerprint` changed from the
       discovered value; a correlated `rotation.started` → `rotation.completed`
       pair with a matching `correlation_id`; `RotationRun.status` endstate
-      `succeeded`. (Azure: new KeyVault/Graph key id; AWS: new access-key id;
-      GCP: new key version/id + fingerprint.)
-- [ ] **Retire** — confirmation-less request returns `conflict/409`; confirmed
+      `succeeded`. (Azure: Graph key id; AWS: new access-key id; GCP: new key id
+      + fingerprint.)
+- [x] **Retire** — confirmation-less request returns `conflict/409`; confirmed
       request transitions to `state: retired`, emits `identity.retired`, and the
-      provider-side credential is invalidated/deleted.
+      provider-side credential is invalidated/deleted (AWS key + login profile
+      deleted; GCP key deleted; Entra password revoked).
 - [ ] **Retire can restore/hide** — the retired identity disappears from the
       active list (`list` hides or marks `retired`) without deleting the audit
-      trail.
-- [ ] **UI** — dashboard shows `provider` label (e.g. "AWS IAM"), ownership,
+      trail. (Adapters skip zero-credential identities on the next `Discover`,
+      but the harness does not yet assert the re-listed view; left for a follow-up.)
+- [x] **UI** — dashboard shows `provider` label (e.g. "AWS IAM"), ownership,
       urgency, expiry, and working Rotate / Retire from the dashboard; the list
       refreshes with provider state.
-- [ ] **Azure-only**: `addPassword` returns a usable secret once
-      (`key_id` + secret_text), invalidation quiet before it appears disabled,
-      and the vault reference (when configured) is versioned and secret-free.
-- [ ] **No secret in output** — no `client_secret`, AWS secret, GCP private
+- [x] **Azure-only**: `addPassword` returns a usable secret once
+      (`key_id` + secret_text), invalidation revokes it, and the redacted
+      receipt never exposes the secret text. (Vault-path verification requires a
+      configured Key Vault and is exercised separately in `docs/azure-demo.md`.)
+- [x] **No secret in output** — no `client_secret`, AWS secret, GCP private
       key, Graph token, or emitted secret text appears in ANY lifecycle event,
       snapshot, integration receipt, log, or HTML render.
 
@@ -285,3 +290,51 @@ Run once per cloud; all must pass.
 - Mutandae already keeps secrets out of snapshots/events/logs by design (see
   `docs/azure-integration.md`); the acceptance checklist above re-verifies that
   for every cloud adapter.
+## 7. Evaluation results (2026-09-02)
+
+Executed against live AWS (account `572030963802`, IAM), GCP (project
+`mutandae-eval`), and Azure / Entra (tenant `ee37cc75-...`, Microsoft Graph)
+with disposable evaluation principals:
+
+```sh
+MUTANDAE_EVAL=1 go test -tags=realclouds -count=1 -v ./internal/eval/...
+```
+
+All real-cloud tests pass: `TestRealCloudDiscoveryReturnsV1`,
+`TestRealCloudListReturnsConformantIdentities`,
+`TestRealCloudRotateAndRetire` (aws/gcp/azure subtests),
+`TestRealCloudUIRendersProvidersAndControls`,
+`TestRealCloudWebLogsContainNoSecrets`, and
+`TestAzureRealIntegrationExtension`. No secret value appeared in any event,
+snapshot, receipt, log, or HTML render.
+
+Real-tenant findings that shaped the adapters:
+
+- **AWS `ListUsers` omits tags; `GetUser` returns them.** The AWS adapter now
+  resolves each user with `GetUser` (`getUser`) to map `MUTANDAE_*` ownership
+  tags honestly (`internal/provider/aws.go`). `ListUsers` keeps pagination.
+- **SigV4 canonical URI must be `/` for the IAM endpoint** (empty path
+  normalizes to `/`); the unit fake previously only checked the header format,
+  so a real-signed request failed with `SignatureDoesNotMatch`. The regression
+  test `TestSignV4OfficialVector` pins the official aws-sig-v4-test-suite
+  `get-vanilla` vector (`Signature=5fa00fa3...`).
+- **GCP key creation requires `keyAlgorithm: KEY_ALG_RSA_2048`** (not the
+  aliased `..._2048_4096`), or IAM rejects with `INVALID_ARGUMENT`.
+- **Azure app-only creation needs `Application.ReadWrite.All`.** Under
+  client credentials, `POST /applications` with `OwnedBy` only returns
+  `Authorization_RequestDenied`; and Graph cannot attach a service principal as
+  an application owner (`Unsupported resource type 'DirectoryObject'`). The
+  adapter therefore records a session creation grant for apps it created, and
+  the requirements contract warns about the app-only permission split.
+- **Microsoft Entra directory writes replicate asynchronously**; mutations
+  against a just-created application can 404 (`Request_ResourceNotFound`) or
+  race removals (`No password credential found with keyId`) for seconds. The
+  Azure adapter performs a bounded read-your-write poll after application
+  creation and retries idempotent removals; the GCP adapter retries transient
+  transport failures on GET/DELETE.
+- **GCP budget/alert and eval credential hygiene:** eval principals were
+  scoped to the `mutandae-eval-` prefix (`iam:Create/Update/DeleteAccessKey`,
+  `iam:DeleteLoginProfile`, `iam:TagUser` under
+  `user/mutandae-eval-*`; GCP custom role `mutandaeEvalKeyAdmin`). All eval
+  keys are disposable; after the evaluation is closed they should be revoked
+  and the principals deleted per section 6.

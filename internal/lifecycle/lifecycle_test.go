@@ -155,21 +155,30 @@ func TestRotateExtendsExpiryAndCorrelatesRun(t *testing.T) {
 
 	events, _ := store.Events("payments-api")
 	var hadStarted, hadCompleted bool
+	var startedCorr, completedCorr string
 	for _, e := range events {
 		switch e.Type {
 		case protocol.EventRotationStarted:
 			hadStarted = true
+			startedCorr = e.CorrelationID
 		case protocol.EventRotationCompleted:
 			hadCompleted = true
+			completedCorr = e.CorrelationID
 		default:
 			continue // discovery/registration events are not rotation-scoped
 		}
 		if e.RunID != runs[0].ID {
 			t.Errorf("event %q missing run correlation", e.Type)
 		}
+		if e.CorrelationID != runs[0].ID {
+			t.Errorf("event %q correlation_id = %q, want run id %q", e.Type, e.CorrelationID, runs[0].ID)
+		}
 	}
 	if !hadStarted || !hadCompleted {
 		t.Fatalf("expected rotation.started and rotation.completed events, got %#v", events)
+	}
+	if startedCorr == "" || startedCorr != completedCorr {
+		t.Errorf("rotation events do not share a correlation_id: started=%q completed=%q", startedCorr, completedCorr)
 	}
 }
 

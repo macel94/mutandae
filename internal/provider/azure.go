@@ -41,6 +41,7 @@ type AzureClient struct {
 	mu               sync.Mutex
 	tokens           map[string]accessToken
 	callingObjectIDs map[string]struct{}
+	callingSPID      string
 	createdObjects   map[string]struct{}
 	vault            *KeyVaultClient
 }
@@ -105,6 +106,7 @@ func (c *AzureClient) Verify(ctx context.Context) error {
 	if servicePrincipal.ID != "" {
 		c.mu.Lock()
 		c.callingObjectIDs[servicePrincipal.ID] = struct{}{}
+		c.callingSPID = servicePrincipal.ID
 		c.mu.Unlock()
 	}
 	var application graphApplication
@@ -167,13 +169,18 @@ func (c *AzureClient) CreateApplication(ctx context.Context, req protocol.AzureA
 	if err := c.graphJSON(ctx, http.MethodPost, "/applications", map[string]string{"displayName": name}, &application); err != nil {
 		return protocol.AzureApplication{}, err
 	}
+	c.waitForApplication(ctx, application.ID)
 	c.mu.Lock()
 	c.createdObjects[application.ID] = struct{}{}
 	c.mu.Unlock()
-	// Microsoft Graph assigns the creating principal as owner for the
-	// supported application-permission flow. Trust that documented result;
-	// querying /owners after creation could turn a successful create into an
-	// orphaned application if directory relationship reads are restricted.
+	// Verification against a real tenant (2026-09-02) proved two Graph facts:
+	//  1. client-credentials flow does not auto-assign the creating principal
+	//     as owner of the new application;
+	//  2. POST /applications/{id}/owners rejects a service principal owner
+	//     with Unsupported resource type 'DirectoryObject'.
+	// Therefore the adapter records a session creation grant: applications
+	// created by this session are owned by this session. isOwned honors that
+	// grant; every mutation gate still refuses other tenants' applications.
 	return application.toProtocol(true), nil
 }
 
@@ -202,7 +209,7 @@ func (c *AzureClient) CreateSecret(ctx context.Context, req protocol.AzureSecret
 	}}
 	var credential graphPasswordCredential
 	path := "/applications/" + url.PathEscape(req.ApplicationObjectID) + "/addPassword"
-	if err := c.graphJSON(ctx, http.MethodPost, path, body, &credential); err != nil {
+	if err := c.graphJSONRetry(ctx, 8, transientGraph404, http.MethodPost, path, body, &credential); err != nil {
 		return protocol.AzureSecretResult{}, err
 	}
 	if credential.SecretText == "" {
@@ -259,7 +266,7 @@ func (c *AzureClient) RemoveSecret(ctx context.Context, applicationObjectID, key
 	}
 	body := map[string]string{"keyId": keyID}
 	path := "/applications/" + url.PathEscape(applicationObjectID) + "/removePassword"
-	return c.graphJSON(ctx, http.MethodPost, path, body, nil)
+	return c.graphJSONRetry(ctx, 8, transientPasswordReplication, http.MethodPost, path, body, nil)
 }
 
 // InvalidateSecret revokes Graph authentication and, when configured, disables
@@ -296,6 +303,16 @@ func (c *AzureClient) ensureOwned(ctx context.Context, objectID string) error {
 }
 
 func (c *AzureClient) isOwned(ctx context.Context, objectID string) (bool, error) {
+	c.mu.Lock()
+	_, sessionCreated := c.createdObjects[objectID]
+	c.mu.Unlock()
+	if sessionCreated {
+		// Session creation grant: applications created by this session are
+		// owned by this session. App-only flows cannot attach the calling
+		// service principal as an owner through Graph, so the session grant is
+		// the honest ownership record; it never covers other tenants' apps.
+		return true, nil
+	}
 	var response graphOwnerCollection
 	path := "/applications/" + url.PathEscape(objectID) + "/owners?$select=id"
 	if err := c.graphJSON(ctx, http.MethodGet, path, nil, &response); err != nil {
@@ -307,9 +324,6 @@ func (c *AzureClient) isOwned(ctx context.Context, objectID string) (bool, error
 		if _, ok := c.callingObjectIDs[owner.ID]; ok {
 			return true, nil
 		}
-	}
-	if _, ok := c.createdObjects[objectID]; ok {
-		return true, nil
 	}
 	return false, nil
 }
@@ -377,6 +391,86 @@ func (c *AzureClient) token(ctx context.Context, scope string) (string, error) {
 	return payload.AccessToken, nil
 }
 
+// waitForApplication polls a freshly created application until the directory
+// replica serving this session observes it. Microsoft Entra replicates writes
+// asynchronously and can transiently answer 404 (Request_ResourceNotFound) for
+// seconds after creation; addPassword/removePassword then fail even though the
+// object is real. Bounded and best-effort: on timeout the following mutation
+// retry (graphJSONRetry) carries the real error.
+func (c *AzureClient) waitForApplication(ctx context.Context, objectID string) {
+	const attempts = 12
+	const pause = 750 * time.Millisecond
+	var target graphApplication
+	for i := 0; i < attempts; i++ {
+		if err := c.graphJSON(ctx, http.MethodGet, "/applications/"+url.PathEscape(objectID)+"?$select=id", nil, &target); err == nil {
+			return
+		}
+		select {
+		case <-time.After(pause):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// graphAPIError describes a Graph HTTP failure. It is typed so transient
+// directory replication 404s can be retried without re-parsing messages.
+type graphAPIError struct {
+	StatusCode int
+	Method     string
+	Path       string
+	Detail     string
+}
+
+func (e *graphAPIError) Error() string {
+	return fmt.Sprintf("Microsoft Graph %s %s returned HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Detail)
+}
+
+// transientGraph404 reports whether err is a Graph HTTP 404 such as the
+// async-replication Request_ResourceNotFound seen right after directory writes.
+func transientGraph404(err error) bool {
+	var apiErr *graphAPIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
+
+// transientPasswordReplication extends transientGraph404 with the write-after-
+// write 400 ("No password credential found with keyId") observed when
+// removePassword races an addPassword that has not replicated yet. Retrying
+// removal is idempotent and safe.
+func transientPasswordReplication(err error) bool {
+	if transientGraph404(err) {
+		return true
+	}
+	var apiErr *graphAPIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Detail, "No password credential found with keyId")
+}
+
+// graphJSONRetry retries transient directory replication responses
+// (see transientGraph404/transientPasswordReplication). Ident predicates with
+// caller-chosen, idempotent re-issuance; non-matching failures surface
+// immediately.
+func (c *AzureClient) graphJSONRetry(ctx context.Context, attempts int, retryable func(error) bool, method, path string, body any, output any) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		lastErr = c.graphJSON(ctx, method, path, body, output)
+		if lastErr == nil {
+			return nil
+		}
+		if retryable == nil || !retryable(lastErr) {
+			return lastErr
+		}
+		select {
+		case <-time.After(700 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return lastErr
+}
+
 func (c *AzureClient) graphJSON(ctx context.Context, method, path string, body any, output any) error {
 	token, err := c.token(ctx, "https://graph.microsoft.com/.default")
 	if err != nil {
@@ -409,7 +503,12 @@ func (c *AzureClient) graphJSON(ctx context.Context, method, path string, body a
 		return redactError(err.Error(), secret, token)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("Microsoft Graph %s %s returned HTTP %d: %s", method, path, response.StatusCode, redactError(strings.TrimSpace(string(data)), secret, token))
+		return &graphAPIError{
+			StatusCode: response.StatusCode,
+			Method:     method,
+			Path:       path,
+			Detail:     redactError(strings.TrimSpace(string(data)), secret, token).Error(),
+		}
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent || len(data) == 0 {
 		return nil
