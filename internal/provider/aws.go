@@ -49,6 +49,12 @@ type AWSAdapterConfig struct {
 	HTTPClient *http.Client
 	// Now pins the provider clock for deterministic tests.
 	Now func() time.Time
+	// DemoOnly restricts the adapter to the mutandae-demo-* namespace: Discover
+	// only returns demo identities and every mutation refuses anything else.
+	// The live demo enables this so real productive IAM users in the account
+	// are neither listed nor actionable, while the eval harness keeps the full
+	// provider view.
+	DemoOnly bool
 }
 
 // AWSAdapter is a real AWS IAM adapter behind the CloudAdapter boundary. It
@@ -70,6 +76,7 @@ type AWSAdapter struct {
 	endpoint     string
 	httpClient   *http.Client
 	now          func() time.Time
+	demoOnly     bool
 
 	mu             sync.Mutex
 	oneTimeSecret  string
@@ -116,6 +123,7 @@ func NewAWSAdapter(cfg AWSAdapterConfig) (*AWSAdapter, error) {
 		endpoint:     endpoint,
 		httpClient:   httpClient,
 		now:          now,
+		demoOnly:     cfg.DemoOnly,
 	}, nil
 }
 
@@ -167,7 +175,11 @@ func (a *AWSAdapter) Discover(ctx context.Context) ([]protocol.MachineIdentity, 
 	}
 	identities := make([]protocol.MachineIdentity, 0, len(users))
 	for _, user := range users {
-		// IAM ListUsers does not return tags, but GetUser does. Ownership and
+		// In demo-only mode the account's productive users are intentionally
+		// invisible: only the mutandae-demo-* namespace is governed.
+		if a.demoOnly && !isDemoName(user.UserName) {
+			continue
+		} // IAM ListUsers does not return tags, but GetUser does. Ownership and
 		// renewal metadata are stored as MUTANDAE_* tags (see
 		// docs/aws-integration.md), so resolve each user with GetUser to map
 		// ownership honestly.
@@ -289,6 +301,9 @@ func (a *AWSAdapter) Rotate(ctx context.Context, identity protocol.MachineIdenti
 	if userName == "" {
 		return protocol.MachineIdentity{}, fmt.Errorf("%s: rotate requires a provider_id (IAM user name)", awsKind)
 	}
+	if a.demoOnly && !isDemoName(userName) {
+		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to rotate %q outside the %s* namespace", awsKind, userName, demoPrefix)
+	}
 	keys, err := a.listAccessKeys(ctx, userName)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -347,6 +362,9 @@ func (a *AWSAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 	if userName == "" {
 		return protocol.MachineIdentity{}, fmt.Errorf("%s: retire requires a provider_id (IAM user name)", awsKind)
 	}
+	if a.demoOnly && !isDemoName(userName) {
+		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to retire %q outside the %s* namespace", awsKind, userName, demoPrefix)
+	}
 	keys, err := a.listAccessKeys(ctx, userName)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -368,6 +386,100 @@ func (a *AWSAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 		Delivery: "secret-manager",
 	}
 	return view, nil
+}
+
+// Create provisions a brand-new, zero-permission IAM user in the demo
+// namespace: it creates the user (no policy, no group, no console login) and
+// one access key, returning the key secret exactly once. The owner metadata is
+// tagged so the user is re-discovered with meaningful ownership. The adapter
+// never attaches a policy or adds the user to a group, and it refuses to
+// operate outside the mutandae-demo-* namespace so the scoped governor
+// credentials are the outer safety boundary.
+func (a *AWSAdapter) Create(ctx context.Context, hint string) (protocol.ProvisionResponse, error) {
+	name, err := buildDemoName(hint, 8)
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	if !isDemoName(name) {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%s: refusing to create an IAM user outside the %s* namespace", awsKind, demoPrefix)
+	}
+	if _, err := a.createUser(ctx, name); err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	key, err := a.createAccessKey(ctx, name)
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	// Best-effort ownership metadata. The governor policy is scoped to
+	// user/mutandae-demo-*, so a missing TagUser permission surfaces here and
+	// can be diagnosed, but the identity is already usable and zero-permission
+	// without it.
+	_ = a.tagUser(ctx, name, map[string]string{
+		"MUTANDAE_TEAM":         "Demo",
+		"MUTANDAE_SERVICE":      name,
+		"MUTANDAE_PURPOSE":      "Public demo identity with zero permissions",
+		"MUTANDAE_ENVIRONMENT":  "demo",
+		"MUTANDAE_CRITICALITY":  "low",
+		"MUTANDAE_RENEWAL_DAYS": "1",
+		"MUTANDAE_CONTACTS":     "none@none.invalid",
+	})
+
+	identity := a.demoIdentity(name, key.AccessKeyID, key.CreateDate)
+	return protocol.ProvisionResponse{
+		APIVersion:    protocol.Version,
+		Identity:      identity,
+		OneTimeSecret: key.SecretAccessKey,
+		KeyID:         key.AccessKeyID,
+		Instructions:  "This IAM user has NO attached policies, NO group memberships, and NO console login. Its access key cannot do anything on its own. Store the secret now — it will never be shown again.",
+	}, nil
+}
+
+// demoIdentity builds a conformant identity for a freshly provisioned user with
+// demo ownership metadata.
+func (a *AWSAdapter) demoIdentity(name, keyID string, createDate time.Time) protocol.MachineIdentity {
+	if createDate.IsZero() {
+		createDate = a.now().UTC()
+	}
+	identity := a.toIdentity(iamUserRecord{UserName: name}, []iamAccessKeyMetadata{{
+		UserName:    name,
+		AccessKeyID: keyID,
+		Status:      "Active",
+		CreateDate:  createDate,
+	}})
+	identity.DisplayName = name
+	return identity
+}
+
+func (a *AWSAdapter) createUser(ctx context.Context, userName string) (iamUserRecord, error) {
+	params := url.Values{"Action": {"CreateUser"}, "Version": {awsIAMVersion}, "UserName": {userName}}
+	var response struct {
+		User iamUserRecord `xml:"CreateUserResult>User"`
+	}
+	if err := a.call(ctx, params, &response); err != nil {
+		// A prior demo run may have left the user behind; that is harmless.
+		if strings.Contains(err.Error(), "EntityAlreadyExists") {
+			return iamUserRecord{UserName: userName}, nil
+		}
+		return iamUserRecord{}, err
+	}
+	if response.User.UserName == "" {
+		return iamUserRecord{UserName: userName}, nil
+	}
+	return response.User, nil
+}
+
+func (a *AWSAdapter) tagUser(ctx context.Context, userName string, tags map[string]string) error {
+	params := url.Values{"Action": {"TagUser"}, "Version": {awsIAMVersion}, "UserName": {userName}}
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		params.Set(fmt.Sprintf("Tags.member.%d.Key", i+1), key)
+		params.Set(fmt.Sprintf("Tags.member.%d.Value", i+1), tags[key])
+	}
+	return a.call(ctx, params, nil)
 }
 
 // --- IAM Query API plumbing (AWS Signature Version 4) ---

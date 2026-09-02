@@ -45,6 +45,14 @@ type Adapter interface {
 	Retire(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error)
 }
 
+// Provisioner is the optional provisioning capability of an Adapter: it
+// creates a brand-new, zero-permission identity in a real tenant. Simulators
+// and non-provisioning adapters do not implement it, so the control plane falls
+// back to a conflict for them.
+type Provisioner interface {
+	Create(ctx context.Context, provider, name string) (protocol.ProvisionResponse, error)
+}
+
 // ErrorCode translates a lifecycle error to the closest protocol ErrorCode so
 // handlers can emit a conformant failure envelope.
 func ErrorCode(err error) protocol.ErrorCode {

@@ -22,7 +22,7 @@
         <a href="#inventory">Identities</a>
         <a href="#activity-panel">Audit trail</a>
         <a href="/configuration">Configuration</a>
-        <span class="environment-chip"><span class="status-dot"></span> Multi-cloud simulator</span>
+        <span class="environment-chip"><span class="status-dot"></span>{{ if .LiveReal }}Live demo · real tenants{{ else }}Multi-cloud simulator{{ end }}</span>
       </nav>
     </header>
 
@@ -92,7 +92,7 @@
             </div>
           </div>
           {{ template "identity-list" . }}
-          <div class="table-note"><span class="status-dot"></span> Simulator data · Last checked {{ .UpdatedAt }}</div>
+          <div class="table-note"><span class="status-dot"></span>{{ if .LiveReal }}Live demo — real zero-permission identities{{ else }}Simulator data{{ end }} · Last checked {{ .UpdatedAt }}</div>
         </section>
 
         <aside class="panel activity-panel" id="activity-panel" aria-live="polite">

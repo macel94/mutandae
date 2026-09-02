@@ -122,3 +122,19 @@ func (m *MultiProvider) Retire(ctx context.Context, identity protocol.MachineIde
 	}
 	return a.Retire(ctx, identity)
 }
+
+// Create routes a provisioning request to the named provider's adapter and
+// returns a zero-permission identity plus a one-time secret. It returns
+// ErrCreateUnsupported when the target adapter does not implement CloudCreate
+// (for example a simulator) or when no adapter governs the provider.
+func (m *MultiProvider) Create(ctx context.Context, providerKind, name string) (protocol.ProvisionResponse, error) {
+	a, err := m.adapterFor(providerKind)
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	creator, ok := a.(CloudCreate)
+	if !ok {
+		return protocol.ProvisionResponse{}, ErrCreateUnsupported
+	}
+	return creator.Create(ctx, name)
+}

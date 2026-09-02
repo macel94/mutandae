@@ -57,6 +57,11 @@ type GCPAdapterConfig struct {
 	HTTPClient *http.Client
 	// Now pins the provider clock for deterministic tests.
 	Now func() time.Time
+	// DemoOnly restricts the adapter to the mutandae-demo-* namespace: Discover
+	// only returns demo service accounts and every mutation refuses anything
+	// else. The live demo enables this so the governor and any other non-demo
+	// service account in the project are neither listed nor actionable.
+	DemoOnly bool
 }
 
 type gcpServiceAccount struct {
@@ -96,6 +101,7 @@ type GCPAdapter struct {
 	iamBaseURL  string
 	httpClient  *http.Client
 	now         func() time.Time
+	demoOnly    bool
 
 	mu             sync.Mutex
 	accessToken    string
@@ -167,6 +173,7 @@ func NewGCPAdapter(cfg GCPAdapterConfig) (*GCPAdapter, error) {
 		iamBaseURL:  strings.TrimSuffix(iamBaseURL, "/"),
 		httpClient:  httpClient,
 		now:         now,
+		demoOnly:    cfg.DemoOnly,
 	}, nil
 }
 
@@ -230,6 +237,11 @@ func (a *GCPAdapter) Discover(ctx context.Context) ([]protocol.MachineIdentity, 
 	identities := make([]protocol.MachineIdentity, 0, len(accounts))
 	for _, account := range accounts {
 		if account.Disabled {
+			continue
+		}
+		// In demo-only mode only the mutandae-demo-* namespace is governed;
+		// the governor and any other helper service account stay invisible.
+		if a.demoOnly && !isDemoName(account.Email) {
 			continue
 		}
 		keys, err := a.listKeys(ctx, account.Email)
@@ -349,6 +361,9 @@ func (a *GCPAdapter) Rotate(ctx context.Context, identity protocol.MachineIdenti
 	if err != nil {
 		return protocol.MachineIdentity{}, err
 	}
+	if a.demoOnly && !isDemoName(email) {
+		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to rotate %q outside the %s* namespace", gcpKind, email, demoPrefix)
+	}
 	keys, err := a.listKeys(ctx, email)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -400,6 +415,9 @@ func (a *GCPAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 	if err != nil {
 		return protocol.MachineIdentity{}, err
 	}
+	if a.demoOnly && !isDemoName(email) {
+		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to retire %q outside the %s* namespace", gcpKind, email, demoPrefix)
+	}
 	keys, err := a.listKeys(ctx, email)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -418,6 +436,85 @@ func (a *GCPAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 		Delivery: "secret-manager",
 	}
 	return view, nil
+}
+
+// Create provisions a brand-new, zero-permission service account in the demo
+// namespace and one user-managed key, returning the private key exactly once.
+// A freshly created service account has NO IAM roles, so it cannot do anything
+// until someone grants it access — which the adapter (and the governor's
+// least-privilege role) explicitly cannot do. The account ID is capped to stay
+// within GCP's 6-30 character service account ID rule.
+func (a *GCPAdapter) Create(ctx context.Context, hint string) (protocol.ProvisionResponse, error) {
+	if len(hint) > 7 {
+		hint = hint[:7]
+	}
+	name, err := buildDemoName(hint, 8)
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	if !isDemoName(name) {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%s: refusing to create a service account outside the %s* namespace", gcpKind, demoPrefix)
+	}
+	account, err := a.createServiceAccount(ctx, name, "Mutandae public demo (zero permissions)")
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	key, err := a.createKey(ctx, account.Email)
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	decoded, err := base64.StdEncoding.DecodeString(key.PrivateKeyData)
+	if err != nil {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%s: decode created key material: %w", gcpKind, err)
+	}
+
+	identity := a.toIdentity(account, []gcpServiceAccountKey{key})
+	identity.Environment = "demo"
+	identity.Ownership = protocol.Ownership{
+		Team:        "Demo",
+		Service:     account.Email,
+		Purpose:     "Public demo identity with zero permissions",
+		Criticality: "low",
+	}
+	return protocol.ProvisionResponse{
+		APIVersion:    protocol.Version,
+		Identity:      identity,
+		OneTimeSecret: string(decoded),
+		KeyID:         gcpKeyID(key.Name),
+		Instructions:  "This service account has NO IAM roles and cannot do anything on its own. Store the private key now — it will never be shown again.",
+	}, nil
+}
+
+func (a *GCPAdapter) createServiceAccount(ctx context.Context, accountID, displayName string) (gcpServiceAccount, error) {
+	path := a.iamBaseURL + "/projects/" + url.PathEscape(a.projectID) + "/serviceAccounts"
+	body := map[string]any{
+		"accountId": accountID,
+		"serviceAccount": map[string]string{
+			"displayName": displayName,
+		},
+	}
+	var account gcpServiceAccount
+	if err := a.iamJSON(ctx, http.MethodPost, path, body, &account); err != nil {
+		// A previous demo run may have left the service account behind; reuse
+		// it rather than failing the create.
+		if strings.Contains(err.Error(), "exists") || strings.Contains(err.Error(), "EXISTS") {
+			accounts, listErr := a.listServiceAccounts(ctx)
+			if listErr != nil {
+				return gcpServiceAccount{}, listErr
+			}
+			wantEmail := accountID + "@" + a.projectID + ".iam.gserviceaccount.com"
+			for _, candidate := range accounts {
+				if candidate.Email == wantEmail {
+					return candidate, nil
+				}
+			}
+		}
+		return gcpServiceAccount{}, err
+	}
+	if account.Email == "" || account.UniqueID == "" {
+		return gcpServiceAccount{}, fmt.Errorf("%s: createServiceAccount returned an incomplete response", gcpKind)
+	}
+	return account, nil
 }
 
 // emailFor resolves a service account unique id (the ProviderBinding) to its

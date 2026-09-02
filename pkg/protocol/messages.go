@@ -123,6 +123,40 @@ func (r RetireRequest) RequestedByOrDefault() string {
 	return ActorOperator
 }
 
+// ProvisionRequest asks the control plane to provision a brand-new machine
+// identity in a real tenant for the public demo. The created identity is always
+// zero-permission (no policy, role, group, or granted API permission) and is
+// never given a login path. Provider selects the target cloud adapter.
+// RequestedBy and OwnerIP are set by the web layer; OwnerIP never leaves the
+// server and is never logged or persisted.
+type ProvisionRequest struct {
+	Provider    string `json:"provider"`
+	Purpose     string `json:"purpose,omitempty"`
+	RequestedBy string `json:"requested_by,omitempty"`
+	OwnerIP     string `json:"-"`
+}
+
+// ProvisionResponse returns the provisioned identity plus a one-time secret
+// that is written only to this single HTTP response. The control plane never
+// persists OneTimeSecret, and any audit trail carries only KeyID/Location.
+type ProvisionResponse struct {
+	APIVersion    string          `json:"api_version"`
+	Identity      MachineIdentity `json:"identity"`
+	OneTimeSecret string          `json:"one_time_secret,omitempty"`
+	KeyID         string          `json:"key_id,omitempty"`
+	Instructions  string          `json:"instructions,omitempty"`
+	Error         *Error          `json:"error,omitempty"`
+}
+
+// RequestedByOrDefault returns the actor that requested provisioning, defaulting
+// to the control plane actor when none is supplied.
+func (r ProvisionRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorControlPlane
+}
+
 // Configuration is the safe, read-only runtime description exposed to demo
 // users. It deliberately excludes connection strings, credentials, provider
 // endpoints, and tenant identifiers.

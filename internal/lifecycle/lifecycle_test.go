@@ -3,7 +3,9 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,5 +299,76 @@ func TestErrorCodeMapping(t *testing.T) {
 		if got := ErrorCode(err); got != want {
 			t.Errorf("ErrorCode(%v) = %q, want %q", err, got, want)
 		}
+	}
+}
+
+// provisioningAdapter wraps fakeAdapter with the Provisioner capability so the
+// store can provision through it and we can assert the one-time secret is
+// never persisted.
+type provisioningAdapter struct {
+	*fakeAdapter
+	createdNames []string
+}
+
+func (p *provisioningAdapter) Create(_ context.Context, provider, name string) (protocol.ProvisionResponse, error) {
+	p.createdNames = append(p.createdNames, name)
+	return protocol.ProvisionResponse{
+		APIVersion: protocol.Version,
+		Identity: protocol.MachineIdentity{
+			ID:          "mutandae-demo-ab12",
+			Name:        "mutandae-demo-ab12",
+			DisplayName: "mutandae-demo-ab12",
+			Provider:    protocol.ProviderBinding{Provider: provider, ProviderID: "prov1"},
+			Ownership:   protocol.Ownership{Team: "Demo", Service: "mutandae-demo-ab12", Purpose: "Public demo identity with zero permissions"},
+			Policy:      protocol.LifecyclePolicy{RenewalPeriod: "P1D"},
+		},
+		OneTimeSecret: "top-secret",
+		KeyID:         "key-1",
+		Instructions:  "use immediately",
+	}, nil
+}
+
+func TestStoreProvisionAdoptsAndNeverPersistsSecret(t *testing.T) {
+	p := &provisioningAdapter{fakeAdapter: &fakeAdapter{}}
+	store, err := NewStore(context.Background(), now(), p)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	resp, err := store.Provision(context.Background(), protocol.ProvisionRequest{Provider: "aws-iam", Purpose: "demo"}, now())
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if resp.OneTimeSecret != "top-secret" {
+		t.Fatalf("response secret = %q", resp.OneTimeSecret)
+	}
+	stored := store.List()
+	if len(stored) != 1 {
+		t.Fatalf("stored identities = %d, want 1", len(stored))
+	}
+	if stored[0].Name != "mutandae-demo-ab12" || stored[0].State != protocol.StateActive {
+		t.Fatalf("unexpected stored identity: %+v", stored[0])
+	}
+	// Ensure the credential reference and events never carry the secret.
+	if strings.Contains(fmt.Sprint(stored[0]), "top-secret") {
+		t.Fatal("one-time secret persisted into the stored identity")
+	}
+	events, _ := store.Events(stored[0].ID)
+	if strings.Contains(fmt.Sprint(events), "top-secret") {
+		t.Fatal("one-time secret leaked into a lifecycle event")
+	}
+	// A missing provider is rejected.
+	if _, err := store.Provision(context.Background(), protocol.ProvisionRequest{}, now()); err == nil {
+		t.Fatal("Provision without provider should error")
+	}
+}
+
+func TestStoreProvisionUnsupportedAdapter(t *testing.T) {
+	adapter := &fakeAdapter{}
+	store, err := NewStore(context.Background(), now(), adapter)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := store.Provision(context.Background(), protocol.ProvisionRequest{Provider: "aws-iam"}, now()); err == nil {
+		t.Fatal("Provision on a non-provisioning adapter should error")
 	}
 }

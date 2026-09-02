@@ -258,3 +258,37 @@ kbd { position: absolute; right: 8px; padding: 1px 5px; border: 1px solid var(--
   .application-controls input { flex-basis: 100%; }
   .footer { display: block; line-height: 2; }
 }
+
+/* Live demo provisioning */
+.provision-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+.provision-card {
+  border: 1px solid var(--line, rgba(120,120,140,.28));
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.provision-target { margin-top: 8px; }
+.provision-result { padding: 20px; }
+.provision-result h3 { margin: 6px 0 8px; }
+.secret-disclosure { display: grid; gap: 6px; margin: 14px 0; }
+.secret-disclosure textarea {
+  width: 100%;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 10px;
+  border: 1px solid rgba(120,120,140,.28);
+  border-radius: 10px;
+  background: rgba(0,0,0,.12);
+  color: inherit;
+  resize: vertical;
+}
+.credential-details { margin-bottom: 4px; }
+.provision-action-row { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }

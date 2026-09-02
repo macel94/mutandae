@@ -209,7 +209,7 @@ func (c *AzureClient) CreateSecret(ctx context.Context, req protocol.AzureSecret
 	}}
 	var credential graphPasswordCredential
 	path := "/applications/" + url.PathEscape(req.ApplicationObjectID) + "/addPassword"
-	if err := c.graphJSONRetry(ctx, 8, transientGraph404, http.MethodPost, path, body, &credential); err != nil {
+	if err := c.graphJSONRetry(ctx, 8, transientPasswordReplication, http.MethodPost, path, body, &credential); err != nil {
 		return protocol.AzureSecretResult{}, err
 	}
 	if credential.SecretText == "" {
@@ -267,6 +267,85 @@ func (c *AzureClient) RemoveSecret(ctx context.Context, applicationObjectID, key
 	body := map[string]string{"keyId": keyID}
 	path := "/applications/" + url.PathEscape(applicationObjectID) + "/removePassword"
 	return c.graphJSONRetry(ctx, 8, transientPasswordReplication, http.MethodPost, path, body, nil)
+}
+
+// AddPassword issues addPassword for an application without an ownership check.
+// The caller (AzureCloudAdapter) is responsible for scoping to the demo
+// namespace; interactive sessions must use CreateSecret instead. Returns the
+// one-time secret plus a redacted credential.
+func (c *AzureClient) AddPassword(ctx context.Context, applicationObjectID, displayName string, expiresAt time.Time) (protocol.AzureSecretResult, error) {
+	if !guidPattern.MatchString(applicationObjectID) {
+		return protocol.AzureSecretResult{}, errors.New("application_object_id must be a GUID")
+	}
+	if strings.TrimSpace(displayName) == "" {
+		displayName = "demo-rotation"
+	}
+	if expiresAt.IsZero() {
+		expiresAt = c.now().UTC().Add(90 * 24 * time.Hour)
+	}
+	if !expiresAt.After(c.now().UTC()) {
+		return protocol.AzureSecretResult{}, errors.New("expires_at must be in the future")
+	}
+	body := map[string]any{"passwordCredential": map[string]any{
+		"displayName": displayName,
+		"endDateTime": expiresAt.Format(time.RFC3339),
+	}}
+	var credential graphPasswordCredential
+	path := "/applications/" + url.PathEscape(applicationObjectID) + "/addPassword"
+	if err := c.graphJSONRetry(ctx, 8, transientPasswordReplication, http.MethodPost, path, body, &credential); err != nil {
+		return protocol.AzureSecretResult{}, err
+	}
+	if credential.SecretText == "" || credential.KeyID == "" {
+		return protocol.AzureSecretResult{}, errors.New("Microsoft Graph returned no one-time secretText")
+	}
+	return protocol.AzureSecretResult{
+		Credential: credential.toProtocol(),
+		SecretText: credential.SecretText,
+		OneTime:    true,
+	}, nil
+}
+
+// RemovePassword issues removePassword for an application without an ownership
+// check; the caller owns scoping. It is idempotent for the write-after-write
+// replication race.
+func (c *AzureClient) RemovePassword(ctx context.Context, applicationObjectID, keyID string) error {
+	if !guidPattern.MatchString(applicationObjectID) {
+		return errors.New("application_object_id must be a GUID")
+	}
+	if !guidPattern.MatchString(keyID) {
+		return errors.New("key_id must be a GUID")
+	}
+	body := map[string]string{"keyId": keyID}
+	path := "/applications/" + url.PathEscape(applicationObjectID) + "/removePassword"
+	return c.graphJSONRetry(ctx, 8, transientPasswordReplication, http.MethodPost, path, body, nil)
+}
+
+// DeleteApplication removes an application (and its service principal) from the
+// tenant. Only used by the demo adapter after a namespace guard has been
+// applied; it intentionally bypasses the ownership gate because app-only
+// sessions cannot be enumerated as owners.
+func (c *AzureClient) DeleteApplication(ctx context.Context, applicationObjectID string) error {
+	if !guidPattern.MatchString(applicationObjectID) {
+		return errors.New("application_object_id must be a GUID")
+	}
+	path := "/applications/" + url.PathEscape(applicationObjectID)
+	return c.graphJSONRetry(ctx, 4, transientPasswordReplication, http.MethodDelete, path, nil, nil)
+}
+
+// ListApplicationsByPrefix returns applications whose display name starts with
+// the supplied prefix, without per-application ownership checks. It is used by
+// the demo adapter which scopes strictly to the demo namespace.
+func (c *AzureClient) ListApplicationsByPrefix(ctx context.Context, prefix string) ([]protocol.AzureApplication, error) {
+	var response graphApplicationCollection
+	path := "/applications?$select=id,appId,displayName,createdDateTime,passwordCredentials&$filter=startswith(displayName,'" + url.PathEscape(prefix) + "')&$top=100"
+	if err := c.graphJSON(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return nil, err
+	}
+	apps := make([]protocol.AzureApplication, 0, len(response.Value))
+	for _, application := range response.Value {
+		apps = append(apps, application.toProtocol(true))
+	}
+	return apps, nil
 }
 
 // InvalidateSecret revokes Graph authentication and, when configured, disables
@@ -434,15 +513,24 @@ func transientGraph404(err error) bool {
 }
 
 // transientPasswordReplication extends transientGraph404 with the write-after-
-// write 400 ("No password credential found with keyId") observed when
-// removePassword races an addPassword that has not replicated yet. Retrying
-// removal is idempotent and safe.
+// write 400 ("No password credential found with keyId") and the 409
+// Directory_ConcurrencyViolation observed when mutations race Entra's
+// asynchronous directory replication. Retrying these is idempotent and safe.
 func transientPasswordReplication(err error) bool {
 	if transientGraph404(err) {
 		return true
 	}
 	var apiErr *graphAPIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Detail, "No password credential found with keyId")
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Detail, "No password credential found with keyId") {
+		return true
+	}
+	if apiErr.StatusCode == http.StatusConflict && (strings.Contains(apiErr.Detail, "ConcurrencyViolation") || strings.Contains(apiErr.Detail, "concurrent requests")) {
+		return true
+	}
+	return false
 }
 
 // graphJSONRetry retries transient directory replication responses

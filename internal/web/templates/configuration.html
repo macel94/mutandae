@@ -29,6 +29,24 @@
       <section class="config-warning" role="alert">
         <strong>Security warning.</strong> Only use a temporary client secret for a tenant you own. Mutandae holds it in process memory for at most ten minutes and clears it when the session ends. After trying the demo, <strong>invalidate this client secret in Entra ID and remove its consent if you no longer need it.</strong>
       </section>
+      {{ if .Provision }}
+      <section class="panel config-card" aria-labelledby="provision-title">
+        <p class="section-kicker">Live demo · create a real identity</p>
+        <h2 id="provision-title">Create a zero-permission identity in a real tenant</h2>
+        <p class="muted">The server holds least-privilege credentials for the demo tenants below. Creating an identity there is safe and costs nothing: the result has <strong>no permissions</strong> — no AWS policy, no GCP role, no Azure API permission or admin consent — so it cannot do anything until you (outside the demo) grant it access. Each visitor may create a few; the demo auto-reclaims the oldest at its quota and throttles requests per client.</p>
+        <div class="provision-grid">
+          {{ range .Provision }}
+          <form class="provision-card" method="post" action="/identities/provision">
+            <input type="hidden" name="provider" value="{{ .Kind }}">
+            <span class="provider"><span class="provider-mark">{{ .Mark }}</span>{{ .Label }}</span>
+            <p class="muted">{{ .Scope }}</p>
+            <button class="button button-primary" type="submit" hx-post="/identities/provision?provider={{ .Kind }}" hx-target="#provision-target" hx-swap="innerHTML" hx-disable-elt="this">Create demo identity</button>
+          </form>
+          {{ end }}
+        </div>
+        <div id="provision-target" class="provision-target"></div>
+      </section>
+      {{ end }}
       <section class="config-grid" aria-label="Runtime configuration details">
         <article class="panel config-card">
           <p class="section-kicker">Runtime</p>

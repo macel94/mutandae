@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,6 +193,59 @@ func (s *Store) Runs(id string) ([]protocol.RotationRun, bool) {
 		return runs[i].RequestedAt.After(runs[j].RequestedAt)
 	})
 	return runs, true
+}
+
+// Provision creates a brand-new, zero-permission identity in a real tenant via
+// the adapter's Create, then adopts it into governance. The one-time secret in
+// the returned response is never persisted: the stored identity records only
+// the safe credential reference, and any audit trail carries key ids/locations.
+func (s *Store) Provision(ctx context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error) {
+	provider := strings.TrimSpace(req.Provider)
+	if provider == "" {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%w: provider is required", protocol.ErrConformance)
+	}
+	prov, ok := s.adapter.(Provisioner)
+	if !ok {
+		return protocol.ProvisionResponse{}, ErrProviderFailure
+	}
+
+	resp, err := prov.Create(ctx, provider, req.Purpose)
+	if err != nil {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
+	}
+	if resp.Identity.Name == "" {
+		return protocol.ProvisionResponse{}, fmt.Errorf("%w: %s adapter returned no identity", ErrProviderFailure, provider)
+	}
+
+	identity := fixIdentity(resp.Identity)
+	identity.State = protocol.StateActive
+	identity.Health = protocol.HealthHealthy
+	identity.CreatedAt = now.UTC()
+	identity.UpdatedAt = now.UTC()
+	if err := protocol.ValidateIdentity(&identity); err != nil {
+		// Timely cleanup so an unadoptable identity is not left dangling.
+		_, _ = s.adapter.Retire(ctx, identity)
+		return protocol.ProvisionResponse{}, fmt.Errorf("provisioned identity is not conformant: %w", err)
+	}
+
+	s.mu.Lock()
+	s.identities[identity.ID] = identity
+	s.addEvent(identity.ID, now.UTC(), protocol.EventIdentityDiscovered,
+		fmt.Sprintf("Provisioned %s in the %s tenant", identity.Name, provider),
+		protocol.ActorDiscovery, protocol.OutcomeSuccess,
+		map[string]string{"provider_id": identity.Provider.ProviderID}, "")
+	s.addEvent(identity.ID, now.UTC(), protocol.EventIdentityRegistered,
+		fmt.Sprintf("Registered %s into governance", identity.Name),
+		req.RequestedByOrDefault(), protocol.OutcomeSuccess, nil, "")
+	s.mu.Unlock()
+	if err := s.persistLocked(ctx); err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+
+	// Deliver the one-time credential only in this response; it is not stored.
+	resp.Identity = identity
+	resp.APIVersion = protocol.Version
+	return resp, nil
 }
 
 // Register provisions a new machine identity into governance. It validates the

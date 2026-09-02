@@ -1,0 +1,22 @@
+{{ define "provision" }}
+<div id="identity-list" class="provision-result-wrap">
+  <div class="provision-result panel" role="alert">
+    <p class="section-kicker">Real identity provisioned · zero permissions</p>
+    <h3>Here is your one-time credential for {{ .Identity.Provider }}</h3>
+    <p class="muted">{{ .Instructions }}</p>
+    <dl class="config-list credential-details">
+      <div><dt>Identity</dt><dd><code>{{ .Identity.Name }}</code></dd></div>
+      {{ if .KeyID }}<div><dt>Key ID</dt><dd><code>{{ .KeyID }}</code></dd></div>{{ end }}
+      <div><dt>Provider</dt><dd>{{ .Identity.Provider }}</dd></div>
+    </dl>
+    {{ if .Secret }}
+    <label class="secret-disclosure">
+      <span>One-time secret — copy it now, it will never be shown again</span>
+      <textarea readonly rows="6" onfocus="this.select()">{{ .Secret }}</textarea>
+    </label>
+    {{ end }}
+    <p class="muted">The control plane never stored this secret. The identity above requires you to attach permissions (which the demo cannot do) before it can do anything in the tenant. Return to the dashboard to rotate or retire it.</p>
+  </div>
+  <a class="button button-secondary" href="/" rel="nofollow">Back to dashboard</a>
+</div>
+{{ end }}

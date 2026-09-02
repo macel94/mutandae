@@ -413,3 +413,20 @@ func (f *fakeLifecycle) Retire(_ context.Context, req protocol.RetireRequest, no
 	identity.State = protocol.StateRetired
 	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity}, nil
 }
+
+func (f *fakeLifecycle) Provision(_ context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error) {
+	identity := protocol.MachineIdentity{
+		ID:       "prov-1",
+		Name:     "mutandae-demo-abc1",
+		State:    protocol.StateActive,
+		Health:   protocol.HealthHealthy,
+		Provider: protocol.ProviderBinding{Provider: req.Provider, ProviderID: "prov-1"},
+	}
+	f.identities = append(f.identities, identity)
+	return protocol.ProvisionResponse{
+		APIVersion:    protocol.Version,
+		Identity:      identity,
+		OneTimeSecret: "demo-secret",
+		KeyID:         "key-1",
+	}, nil
+}

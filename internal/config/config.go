@@ -15,6 +15,10 @@ type Public struct {
 	Persistence string
 	Provider    string
 	Clock       func() time.Time
+	// Features advertises safe, non-secret capability flags to the UI. The
+	// composition root adds "provision:<kind>" for each real tenant that can
+	// create zero-permission identities.
+	Features []string
 }
 
 func (p Public) Configuration() protocol.Configuration {
@@ -43,6 +47,7 @@ func (p Public) Configuration() protocol.Configuration {
 		"Customer credentials never persisted by Mutandae",
 		"Read-only deployment configuration",
 	}
+	features = append(features, p.Features...)
 	if persistence == "redis" {
 		features = append(features, "Redis snapshot persistence", "Redis pub/sub change propagation", "Redacted integration event receipts")
 	} else {

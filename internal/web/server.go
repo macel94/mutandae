@@ -37,6 +37,7 @@ type LifecycleService interface {
 	Register(ctx context.Context, req protocol.RegisterRequest, now time.Time) (protocol.RegisterResponse, error)
 	Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error)
 	Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error)
+	Provision(ctx context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error)
 }
 
 // ConfigurationService supplies only the safe, read-only runtime view.
@@ -58,6 +59,10 @@ type Dependencies struct {
 	Integration   lifecycle.IntegrationService
 	Clock         Clock
 	Logger        Logger
+	RateLimit     RateLimitConfig
+	// DemoLimit caps the concurrently active demo identities per provider;
+	// zero falls back to 40.
+	DemoLimit int
 }
 
 type Server struct {
@@ -68,6 +73,11 @@ type Server struct {
 	logger        Logger
 	configuration ConfigurationService
 	integration   lifecycle.IntegrationService
+	readLimiter   *rateLimiter
+	writeLimiter  *rateLimiter
+	createLimiter *rateLimiter
+	rateLimit     RateLimitConfig
+	demoLimit     int
 }
 
 var _ LifecycleService = (*lifecycle.Store)(nil)
@@ -117,6 +127,11 @@ func newServer(deps Dependencies) (*Server, error) {
 		return nil, err
 	}
 
+	cfg := deps.RateLimit.defaults()
+	demoLimit := deps.DemoLimit
+	if demoLimit <= 0 {
+		demoLimit = 40
+	}
 	return &Server{
 		lifecycle:     deps.Lifecycle,
 		configuration: deps.Configuration,
@@ -125,10 +140,18 @@ func newServer(deps Dependencies) (*Server, error) {
 		static:        static,
 		now:           deps.Clock,
 		logger:        deps.Logger,
+		rateLimit:     cfg,
+		demoLimit:     demoLimit,
 	}, nil
 }
 
 func (s *Server) routes() http.Handler {
+	if s.readLimiter == nil {
+		cfg := s.rateLimit.defaults()
+		s.readLimiter = newRateLimiter(cfg.ReadRate, cfg.ReadBurst, 10000, s.now)
+		s.writeLimiter = newRateLimiter(cfg.WriteRate, cfg.WriteBurst, 10000, s.now)
+		s.createLimiter = newRateLimiter(cfg.CreateRate, cfg.CreateBurst, 10000, s.now)
+	}
 	mux := http.NewServeMux()
 	// Server-rendered frontend (HTMX + Alpine).
 	mux.HandleFunc("GET /{$}", s.dashboard)
@@ -146,6 +169,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
 	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
+	mux.HandleFunc("POST /identities/provision", s.provision)
 	// Protocol JSON API (versioned).
 	mux.HandleFunc("GET /api/v1/", s.apiRoot)
 	mux.HandleFunc("GET /api/v1/configuration", s.apiConfiguration)
@@ -154,11 +178,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/identities/{id}", s.apiInspect)
 	mux.HandleFunc("POST /api/v1/identities/{id}/rotations", s.apiRotate)
 	mux.HandleFunc("POST /api/v1/identities/{id}/retire", s.apiRetire)
+	mux.HandleFunc("POST /api/v1/demo/identities", s.apiProvision)
 	// Health probes.
 	mux.HandleFunc("GET /livez", s.health)
 	mux.HandleFunc("GET /readyz", s.health)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
-	return securityHeaders(mux)
+	return securityHeaders(throttle(s.readLimiter, s.writeLimiter, s.createLimiter, mux))
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +192,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
 	view := configurationPageView{Configuration: s.configuration.Configuration()}
+	view.Provision = s.provisionableProviders()
 	if s.integration != nil {
 		view.IntegrationEnabled = true
 		view.Requirements = s.integration.Requirements()
@@ -220,6 +246,29 @@ func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.identityList(w, r)
+}
+
+// provision creates a new zero-permission identity in a real tenant from the
+// dashboard, applying the per-provider quota and returning a fragment that
+// discloses the one-time secret exactly once along with the refreshed list.
+func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if provider == "" {
+		s.writeError(w, errors.New("provider is required"), http.StatusBadRequest)
+		return
+	}
+	resp, err := s.provisionIdentity(r, provider, "")
+	if err != nil {
+		s.writeError(w, err, http.StatusConflict)
+		return
+	}
+	s.render(w, "provision", provisionView{
+		Identity:     toIdentityView(resp.Identity, s.now()),
+		KeyID:        resp.KeyID,
+		Secret:       resp.OneTimeSecret,
+		Instructions: resp.Instructions,
+		Dashboard:    s.dashboardView(),
+	})
 }
 
 // --- Protocol JSON API ---
@@ -504,6 +553,84 @@ func (s *Server) apiRegister(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *Server) apiProvision(w http.ResponseWriter, r *http.Request) {
+	var req protocol.ProvisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+		return
+	}
+	resp, err := s.provisionIdentity(r, req.Provider, req.Purpose)
+	if err != nil {
+		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, resp)
+}
+
+// provisionIdentity applies the per-provider demo quota (auto-reclaiming the
+// oldest idle demo identity when at capacity) and delegates to the control
+// plane's Provision, which never persists the one-time secret. The hint is
+// sanitized by the provider (buildDemoName) and defaults to empty.
+func (s *Server) provisionIdentity(r *http.Request, provider, hint string) (protocol.ProvisionResponse, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return protocol.ProvisionResponse{}, errors.New("provider is required")
+	}
+	s.reclaimDemo(r.Context(), provider)
+	req := protocol.ProvisionRequest{
+		Provider:    provider,
+		Purpose:     strings.TrimSpace(hint),
+		RequestedBy: operatorOrDefault(r),
+		OwnerIP:     clientIP(r),
+	}
+	resp, err := s.lifecycle.Provision(r.Context(), req, s.now())
+	if err != nil {
+		return protocol.ProvisionResponse{}, err
+	}
+	return resp, nil
+}
+
+// maxActiveDemo per provider keeps a public demo from growing a tenant without
+// bound while the least-privilege server credentials stay the real safety
+// boundary.
+func (s *Server) reclaimDemo(ctx context.Context, provider string) {
+	limit := s.demoLimit
+	if limit <= 0 {
+		limit = 40
+	}
+	for {
+		demo := s.activeDemo(provider)
+		if len(demo) < limit {
+			return
+		}
+		oldest := demo[0]
+		for _, candidate := range demo[1:] {
+			if candidate.CreatedAt.Before(oldest.CreatedAt) {
+				oldest = candidate
+			}
+		}
+		_, err := s.lifecycle.Retire(ctx, protocol.RetireRequest{
+			ID:          oldest.ID,
+			Confirm:     true,
+			RequestedBy: "demo-reclaim",
+			Reason:      "demo quota reached — oldest demo identity reclaimed",
+		}, s.now())
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (s *Server) activeDemo(provider string) []protocol.MachineIdentity {
+	var demo []protocol.MachineIdentity
+	for _, identity := range s.lifecycle.List() {
+		if identity.Provider.Provider == provider && identity.State == protocol.StateActive && strings.HasPrefix(identity.Name, demoPrefixWeb) {
+			demo = append(demo, identity)
+		}
+	}
+	return demo
+}
+
 func (s *Server) apiRotate(w http.ResponseWriter, r *http.Request) {
 	req := protocol.RotateRequest{
 		ID:          r.PathValue("id"),
@@ -727,19 +854,67 @@ func (s *Server) dashboardView() dashboardView {
 			view.Providers = append(view.Providers, summary)
 		}
 	}
+	view.Provision = s.provisionableProviders()
+	// Advertise wired real adapters even before the first identity exists so
+	// the footer always reflects what the demo is attached to.
+	for _, candidate := range view.Provision {
+		if _, ok := providers[candidate.Kind]; !ok {
+			view.Providers = append(view.Providers, candidate)
+		}
+	}
+	view.LiveReal = len(view.Provision) > 0
 	return view
+}
+
+// provisionableProviders returns the providers whose live adapters support
+// creating zero-permission identities, advertised by main via the
+// "provision:<kind>" feature flag.
+func (s *Server) provisionableProviders() []providerSummary {
+	if s.configuration == nil {
+		return nil
+	}
+	cfg := s.configuration.Configuration()
+	seen := make(map[string]bool)
+	var out []providerSummary
+	for _, feature := range cfg.Features {
+		kind, ok := strings.CutPrefix(feature, "provision:")
+		if !ok || seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		out = append(out, providerSummary{
+			Kind:  kind,
+			Label: providerLabel(kind),
+			Mark:  providerMark(kind),
+			Scope: "real tenant, zero permissions",
+		})
+	}
+	return out
 }
 
 type configurationPageView struct {
 	protocol.Configuration
 	IntegrationEnabled bool
 	Requirements       protocol.AzureIntegrationRequirements
+	Provision          []providerSummary
 }
+
+type provisionView struct {
+	Identity     identityView
+	KeyID        string
+	Secret       string
+	Instructions string
+	Dashboard    dashboardView
+}
+
+const demoPrefixWeb = "mutandae-demo-"
 
 // dashboardView carries the multi-provider summary plus the identity inventory.
 type dashboardView struct {
 	Identities []identityView
 	Providers  []providerSummary
+	Provision  []providerSummary
+	LiveReal   bool
 	Total      int
 	Healthy    int
 	Expiring   int

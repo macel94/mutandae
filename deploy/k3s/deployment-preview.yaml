@@ -52,6 +52,56 @@ spec:
                 secretKeyRef:
                   name: mutandae-redis-auth
                   key: REDIS_URL
+            - name: AWS_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AWS_ACCOUNT_ID
+            - name: AWS_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AWS_REGION
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: GCP_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: GCP_PROJECT_ID
+            - name: GCP_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: GCP_REGION
+            - name: GCP_SERVICE_ACCOUNT_KEY_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: GCP_SERVICE_ACCOUNT_KEY_JSON
+            - name: AZURE_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AZURE_TENANT_ID
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AZURE_CLIENT_ID
+            - name: AZURE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: AZURE_CLIENT_SECRET
           resources:
             requests:
               cpu: 10m
