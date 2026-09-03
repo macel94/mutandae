@@ -216,6 +216,49 @@ func TestProviderDescriptorsDriveFooterScopes(t *testing.T) {
 	}
 }
 
+// TestDescriptorOverridesIdentityDerivedScope pins the authority order for
+// footer scopes: identities created before the descriptors existed may not
+// carry the tenant identifier, so the descriptor scope must win over the
+// identity-derived "tenant <empty>" summary.
+func TestDescriptorOverridesIdentityDerivedScope(t *testing.T) {
+	identity := protocol.MachineIdentity{
+		ID:          "legacy-azure",
+		Name:        "mutandae-demo-legacy",
+		Environment: "demo",
+		Provider:    protocol.ProviderBinding{Provider: "azure-entra", ProviderID: "object-id-1", ObjectID: "object-id-1"},
+		Ownership:   protocol.Ownership{Team: "Demo", Service: "legacy"},
+		Policy:      protocol.LifecyclePolicy{RenewalPeriod: "P90D"},
+		State:       protocol.StateActive,
+		Health:      protocol.HealthHealthy,
+		ExpiresAt:   testNow().Add(60 * 24 * time.Hour),
+		CreatedAt:   testNow(),
+		UpdatedAt:   testNow(),
+	}
+	lifecycle := &fakeLifecycle{identities: []protocol.MachineIdentity{identity}}
+	handler, err := NewServer(Dependencies{
+		Lifecycle: lifecycle,
+		Configuration: config.Public{
+			Environment: "live",
+			Clock:       func() time.Time { return testNow() },
+			Providers: []config.ProviderDescriptor{
+				{Kind: "azure-entra", Label: "Azure / Entra ID", Scope: "tenant ee37cc75-5268-4985-8325-7708e8b739ab"},
+			},
+		},
+		Clock:  func() time.Time { return testNow() },
+		Logger: testLogger{},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	body := dashboardBody(t, handler, "/")
+	if !strings.Contains(body, "Azure / Entra ID</strong> · tenant ee37cc75-5268-4985-8325-7708e8b739ab") {
+		t.Error("descriptor scope must override the identity-derived empty tenant scope")
+	}
+	if strings.Contains(body, "· tenant </span>") {
+		t.Error("footer must never render an empty tenant scope")
+	}
+}
+
 func TestProviderScopeFallsBackWithoutDescriptors(t *testing.T) {
 	handler, err := NewServer(Dependencies{
 		Lifecycle: &fakeLifecycle{},

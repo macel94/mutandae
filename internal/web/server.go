@@ -926,6 +926,12 @@ func (s *Server) dashboardView() dashboardView {
 		ClusterVault: s.clusterVaultEnabled(),
 	}
 	providers := make(map[string]providerSummary)
+	descriptorByKind := make(map[string]*config.ProviderDescriptor)
+	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
+		for i, descriptor := range descriptors {
+			descriptorByKind[descriptor.Kind] = &descriptors[i]
+		}
+	}
 	for _, identity := range identities {
 		item := toIdentityView(identity, now)
 		view.Identities = append(view.Identities, item)
@@ -948,6 +954,13 @@ func (s *Server) dashboardView() dashboardView {
 	}
 	for _, kind := range []string{"azure-entra", "aws-iam", "gcp-iam"} {
 		if summary, ok := providers[kind]; ok {
+			// Explicit provider descriptors are authoritative for the wired
+			// scope: identities created before the descriptors existed (or by
+			// the simulator seed) may not carry the tenant identifier.
+			if descriptor := descriptorByKind[kind]; descriptor != nil {
+				summary.Label = descriptor.Label
+				summary.Scope = descriptor.Scope
+			}
 			view.Providers = append(view.Providers, summary)
 		}
 	}

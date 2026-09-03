@@ -238,6 +238,10 @@ func (a *AzureCloudAdapter) toIdentity(app protocol.AzureApplication) protocol.M
 			Provider:   azureKind,
 			ProviderID: app.ObjectID,
 			ObjectID:   app.ObjectID,
+			// The tenant scope is part of the public, non-secret identity
+			// binding: tenant ids ride in tokens and ARNs, and the audit
+			// trail names which tenant an identity lives in.
+			TenantID: a.tenantID,
 		},
 		Ownership: protocol.Ownership{
 			Team:        "Demo",
