@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mutandae/mutandae/internal/buildinfo"
+	"github.com/mutandae/mutandae/internal/config"
 	"github.com/mutandae/mutandae/internal/lifecycle"
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
@@ -74,6 +76,7 @@ type Server struct {
 	logger        Logger
 	configuration ConfigurationService
 	integration   lifecycle.IntegrationService
+	build         buildView
 	readLimiter   *rateLimiter
 	writeLimiter  *rateLimiter
 	createLimiter *rateLimiter
@@ -146,6 +149,7 @@ func newServer(deps Dependencies) (*Server, error) {
 		lifecycle:     deps.Lifecycle,
 		configuration: deps.Configuration,
 		integration:   deps.Integration,
+		build:         toBuildView(),
 		templates:     templates,
 		static:        static,
 		now:           deps.Clock,
@@ -163,7 +167,7 @@ func (s *Server) routes() http.Handler {
 		s.createLimiter = newRateLimiter(cfg.CreateRate, cfg.CreateBurst, 10000, s.now)
 	}
 	mux := http.NewServeMux()
-	// Server-rendered frontend (HTMX + Alpine).
+	// Server-rendered frontend (HTMX + CSP-safe vanilla JS in /static/app.js).
 	mux.HandleFunc("GET /{$}", s.dashboard)
 	mux.HandleFunc("GET /configuration", s.configurationPage)
 	mux.HandleFunc("GET /api/v1/integration/requirements", s.apiIntegrationRequirements)
@@ -206,7 +210,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
-	view := configurationPageView{Configuration: s.configuration.Configuration()}
+	view := configurationPageView{Configuration: s.configuration.Configuration(), Build: s.build}
 	view.Provision = s.provisionableProviders()
 	if s.integration != nil {
 		view.IntegrationEnabled = true
@@ -291,6 +295,7 @@ func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
 			KeyID:     resp.KeyID,
 			Secret:    resp.OneTimeSecret,
 			Vault:     resp.Vault,
+			VaultName: vaultReferenceName(resp.Vault, resp.Identity.Provider.Provider),
 			Dashboard: s.dashboardView(),
 		})
 		return
@@ -300,6 +305,7 @@ func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
 		KeyID:        resp.KeyID,
 		Secret:       resp.OneTimeSecret,
 		Vault:        resp.Vault,
+		VaultName:    vaultReferenceName(resp.Vault, resp.Identity.Provider.Provider),
 		Instructions: resp.Instructions,
 		Dashboard:    s.dashboardView(),
 	})
@@ -318,10 +324,11 @@ func (s *Server) use(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "use-result", useResultView{
-		Identity: toIdentityView(resp.Identity, s.now()),
-		KeyID:    resp.KeyID,
-		Secret:   resp.Secret,
-		Vault:    resp.Vault,
+		Identity:  toIdentityView(resp.Identity, s.now()),
+		KeyID:     resp.KeyID,
+		Secret:    resp.Secret,
+		Vault:     resp.Vault,
+		VaultName: vaultReferenceName(resp.Vault, resp.Identity.Provider.Provider),
 	})
 }
 
@@ -913,8 +920,10 @@ func (s *Server) dashboardView() dashboardView {
 	now := s.now()
 	identities := s.lifecycle.List()
 	view := dashboardView{
-		Identities: make([]identityView, 0, len(identities)),
-		UpdatedAt:  now.Format("15:04 MST"),
+		Identities:   make([]identityView, 0, len(identities)),
+		UpdatedAt:    now.Format("15:04 MST"),
+		Build:        s.build,
+		ClusterVault: s.clusterVaultEnabled(),
 	}
 	providers := make(map[string]providerSummary)
 	for _, identity := range identities {
@@ -944,19 +953,65 @@ func (s *Server) dashboardView() dashboardView {
 	}
 	view.Provision = s.provisionableProviders()
 	// Advertise wired real adapters even before the first identity exists so
-	// the footer always reflects what the demo is attached to.
-	for _, candidate := range view.Provision {
-		if _, ok := providers[candidate.Kind]; !ok {
-			view.Providers = append(view.Providers, candidate)
+	// the footer always reflects what the demo is attached to. Explicit
+	// provider descriptors (labels + public tenant scopes) win when the
+	// configuration advertises them; otherwise fall back to the
+	// feature-flag-derived summaries without identifiers.
+	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
+		for _, descriptor := range descriptors {
+			if _, ok := providers[descriptor.Kind]; ok {
+				continue
+			}
+			view.Providers = append(view.Providers, providerSummary{
+				Kind: descriptor.Kind, Label: descriptor.Label, Mark: providerMark(descriptor.Kind), Scope: descriptor.Scope,
+			})
+		}
+	} else {
+		for _, candidate := range view.Provision {
+			if _, ok := providers[candidate.Kind]; !ok {
+				view.Providers = append(view.Providers, candidate)
+			}
 		}
 	}
 	view.LiveReal = len(view.Provision) > 0
 	return view
 }
 
+// wiredProviderDescriptors returns the provider descriptors advertised by the
+// wired configuration, or nil when it does not carry them; callers then keep
+// the feature-flag fallback. The composition root passes config.Public as the
+// configuration service; its Providers field lists the wired adapters with
+// their explicit, non-secret tenant scopes when set. Reading the field here
+// keeps the optional capability entirely consumer-side: no config-side
+// accessor and no wiring change are required.
+func (s *Server) wiredProviderDescriptors() []config.ProviderDescriptor {
+	if s.configuration == nil {
+		return nil
+	}
+	if public, ok := s.configuration.(config.Public); ok {
+		return public.Providers
+	}
+	return nil
+}
+
+// clusterVaultEnabled reports whether the wired configuration advertises the
+// in-cluster μVault as a credential delivery target.
+func (s *Server) clusterVaultEnabled() bool {
+	if s.configuration == nil {
+		return false
+	}
+	for _, feature := range s.configuration.Configuration().Features {
+		if feature == "vault:cluster" {
+			return true
+		}
+	}
+	return false
+}
+
 // provisionableProviders returns the providers whose live adapters support
 // creating zero-permission identities, advertised by main via the
-// "provision:<kind>" feature flag.
+// "provision:<kind>" feature flag. Explicit provider descriptors, when
+// available, contribute the authoritative label and public tenant scope.
 func (s *Server) provisionableProviders() []providerSummary {
 	if s.configuration == nil {
 		return nil
@@ -977,7 +1032,23 @@ func (s *Server) provisionableProviders() []providerSummary {
 			Scope: "real tenant, zero permissions",
 		})
 	}
-	return out
+	descriptors := s.wiredProviderDescriptors()
+	if len(descriptors) == 0 {
+		return out
+	}
+	byKind := make(map[string]config.ProviderDescriptor, len(descriptors))
+	for _, descriptor := range descriptors {
+		byKind[descriptor.Kind] = descriptor
+	}
+	scoped := make([]providerSummary, 0, len(out))
+	for _, summary := range out {
+		if descriptor, ok := byKind[summary.Kind]; ok {
+			summary.Label = descriptor.Label
+			summary.Scope = descriptor.Scope
+		}
+		scoped = append(scoped, summary)
+	}
+	return scoped
 }
 
 type configurationPageView struct {
@@ -985,6 +1056,32 @@ type configurationPageView struct {
 	IntegrationEnabled bool
 	Requirements       protocol.AzureIntegrationRequirements
 	Provision          []providerSummary
+	Build              buildView
+}
+
+// buildView is the public, non-secret description of the source revision that
+// produced the running binary; the page footers link the exact commit.
+type buildView struct {
+	Short string
+	URL   string
+	Dirty bool
+}
+
+// toBuildView resolves the build revision for rendering. It carries only a
+// public commit id — never build secrets or private details.
+func toBuildView() buildView {
+	build := buildinfo.Current()
+	return buildView{Short: build.Short(), URL: build.URL(), Dirty: build.Dirty}
+}
+
+// vaultReferenceName names the vault a credential copy lives in, honestly
+// distinguishing the in-cluster μVault (detected by its service URL) from the
+// provider-native vaults. The name is display copy only, never a secret.
+func vaultReferenceName(vault *protocol.VaultReference, providerKind string) string {
+	if vault != nil && strings.Contains(vault.URL, "mutandae-vault") {
+		return "the cluster μVault vault"
+	}
+	return vaultLabel(providerKind)
 }
 
 type provisionView struct {
@@ -992,6 +1089,7 @@ type provisionView struct {
 	KeyID        string
 	Secret       string
 	Vault        *protocol.VaultReference
+	VaultName    string
 	Instructions string
 	Dashboard    dashboardView
 }
@@ -1003,6 +1101,7 @@ type provisionResultView struct {
 	KeyID     string
 	Secret    string
 	Vault     *protocol.VaultReference
+	VaultName string
 	Dashboard dashboardView
 }
 
@@ -1010,25 +1109,28 @@ type provisionResultView struct {
 // retrieval. It carries the secret value once; the audit trail records only
 // the vault reference.
 type useResultView struct {
-	Identity identityView
-	KeyID    string
-	Secret   string
-	Vault    *protocol.VaultReference
+	Identity  identityView
+	KeyID     string
+	Secret    string
+	Vault     *protocol.VaultReference
+	VaultName string
 }
 
 const demoPrefixWeb = "mutandae-demo-"
 
 // dashboardView carries the multi-provider summary plus the identity inventory.
 type dashboardView struct {
-	Identities []identityView
-	Providers  []providerSummary
-	Provision  []providerSummary
-	LiveReal   bool
-	Total      int
-	Healthy    int
-	Expiring   int
-	Attention  int
-	UpdatedAt  string
+	Identities   []identityView
+	Providers    []providerSummary
+	Provision    []providerSummary
+	LiveReal     bool
+	Total        int
+	Healthy      int
+	Expiring     int
+	Attention    int
+	UpdatedAt    string
+	Build        buildView
+	ClusterVault bool
 }
 
 // providerSummary is a single provider adapter rendered in the dashboard.
@@ -1040,27 +1142,29 @@ type providerSummary struct {
 }
 
 type identityView struct {
-	ID               string
-	Name             string
-	Provider         string
-	ProviderKind     string
-	ProviderMark     string
-	Environment      string
-	Owner            string
-	Workload         string
-	Criticality      string
-	State            string
-	StateLabel       string
-	RenewalHealth    string
-	Urgency          string
-	UrgencyLabel     string
-	UrgencyClass     string
-	ExpiryLabel      string
-	ExpiryRelative   string
-	LastRotatedLabel string
-	VaultLabel       string
-	VaultVersion     string
-	SearchText       string
+	ID                 string
+	Name               string
+	Provider           string
+	ProviderKind       string
+	ProviderMark       string
+	Environment        string
+	Owner              string
+	Workload           string
+	Criticality        string
+	State              string
+	StateLabel         string
+	RenewalHealth      string
+	Urgency            string
+	UrgencyLabel       string
+	UrgencyClass       string
+	ExpiryLabel        string
+	ExpiryRelative     string
+	LastRotatedLabel   string
+	VaultLabel         string
+	VaultVersion       string
+	CommonVaultLabel   string
+	CommonVaultVersion string
+	SearchText         string
 }
 
 type eventsView struct {
@@ -1113,6 +1217,12 @@ func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityVi
 	// delivery time: names, URLs, and versions only — never secret material.
 	base.VaultLabel = vaultLabel(identity.Provider.Provider)
 	base.VaultVersion = identity.Metadata["vault_version"]
+	// The cluster μVault delivery records its copy under the common_vault_*
+	// metadata keys; render it alongside (or instead of) the native vault.
+	if identity.Metadata["common_vault_url"] != "" || identity.Metadata["common_vault_secret"] != "" || identity.Metadata["common_vault_version"] != "" {
+		base.CommonVaultLabel = "μVault (cluster)"
+	}
+	base.CommonVaultVersion = identity.Metadata["common_vault_version"]
 	base.SearchText = strings.ToLower(strings.Join([]string{
 		identity.Name, base.Provider, identity.Environment, base.Owner, base.Workload, base.Criticality,
 	}, " "))

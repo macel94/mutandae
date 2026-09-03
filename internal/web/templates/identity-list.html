@@ -13,20 +13,20 @@
   </thead>
   <tbody>
     {{ range .Identities }}
-    <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}" x-show="(!filter || $el.dataset.search.includes(filter.toLowerCase())) &amp;&amp; (status === 'all' || (status === 'attention' ? ['expiring', 'overdue'].includes($el.dataset.urgency) : $el.dataset.urgency === status))">
+    <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}">
       <td>
         <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span><strong>{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
       </td>
       <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
       <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
       <td class="vault-cell">
-        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else }}<span class="vault-none">—</span>{{ end }}
+        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else if .CommonVaultVersion }}<span class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</span>{{ else }}<span class="vault-none">—</span>{{ end }}{{ if and .VaultVersion .CommonVaultVersion }}<small class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</small>{{ end }}
       </td>
       <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
       <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
       <td class="actions-cell">
-        <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#activity-panel" hx-swap="innerHTML">↗</button>
-        {{ if ne .State "retired" }}{{ if .VaultVersion }}<button class="icon-button" type="button" title="Use — retrieve the credential from {{ .VaultLabel }} (audited)" aria-label="Use {{ .Name }} — retrieve from vault" hx-post="/identities/{{ .ID }}/use" hx-target="#activity-panel" hx-swap="innerHTML">✦</button>{{ end }}{{ end }}
+        <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#audit-modal-content" hx-swap="innerHTML">↗</button>
+        {{ if ne .State "retired" }}{{ if .VaultVersion }}<button class="icon-button" type="button" title="Use — retrieve the credential from {{ .VaultLabel }} (audited)" aria-label="Use {{ .Name }} — retrieve from vault" hx-post="/identities/{{ .ID }}/use" hx-target="#audit-modal-content" hx-swap="innerHTML">✦</button>{{ end }}{{ end }}
         {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
         {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance and disables its vault copy.">Retire</button>{{ end }}
       </td>

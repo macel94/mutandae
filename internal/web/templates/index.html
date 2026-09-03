@@ -10,19 +10,19 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script defer src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.16.2/dist/cdn.min.js"></script>
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
-  <div class="app-shell" x-data="{ filter: '', status: 'all', navOpen: false }">
+  <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="/" aria-label="Mutandae home">
         <span class="brand-symbol">μ</span><span>Mutandae</span>
       </a>
-      <button class="menu-button" type="button" aria-label="Toggle navigation" x-on:click="navOpen = !navOpen">Menu</button>
-      <nav class="topnav" x-bind:class="{ 'is-open': navOpen }">
+      <button class="menu-button" type="button" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+      <nav class="topnav" id="topnav">
         <a class="active" href="#overview">Overview</a>
         <a href="#inventory">Identities</a>
-        <a href="#activity-panel">Audit trail</a>
+        <a href="#protocol">Protocol</a>
         <a href="/configuration">Configuration</a>
         <span class="environment-chip"><span class="status-dot"></span>{{ if .LiveReal }}Live demo · real tenants{{ else }}Multi-cloud simulator{{ end }}</span>
       </nav>
@@ -89,28 +89,53 @@
             <label class="search-box">
               <span class="sr-only">Search identities</span>
               <span class="search-icon">⌕</span>
-              <input type="search" placeholder="Search owner, workload, provider…" x-model="filter">
+              <input type="search" id="identity-search" placeholder="Search owner, workload, provider…" autocomplete="off">
               <kbd>/</kbd>
             </label>
             <div class="filter-group" role="group" aria-label="Filter by status">
-              <button type="button" x-on:click="status = 'all'" x-bind:class="{ 'selected': status === 'all' }">All</button>
-              <button type="button" x-on:click="status = 'attention'" x-bind:class="{ 'selected': status === 'attention' }">Attention</button>
-              <button type="button" x-on:click="status = 'healthy'" x-bind:class="{ 'selected': status === 'healthy' }">Healthy</button>
+              <button type="button" data-status="all" class="selected">All</button>
+              <button type="button" data-status="attention">Attention</button>
+              <button type="button" data-status="healthy">Healthy</button>
             </div>
           </div>
           {{ template "identity-list" . }}
           <div class="table-note"><span class="status-dot"></span>{{ if .LiveReal }}Live demo — real zero-permission identities{{ else }}Simulator data{{ end }} · Last checked {{ .UpdatedAt }}</div>
         </section>
-
-        <aside class="panel activity-panel" id="activity-panel" aria-live="polite">
-          <div class="empty-activity">
-            <span class="empty-icon">↗</span>
-            <p class="section-kicker">Audit trail</p>
-            <h2>Choose an identity</h2>
-            <p>Inspect lifecycle events, policy decisions, and rotation evidence without leaving the inventory.</p>
-          </div>
-        </aside>
       </div>
+
+      <section class="protocol-explainer panel" id="protocol" aria-labelledby="protocol-title">
+        <div class="panel-heading protocol-heading">
+          <div>
+            <p class="section-kicker">Open contract</p>
+            <h2>What is the μTandae Protocol?</h2>
+          </div>
+          <span class="environment-chip"><span class="status-dot"></span>Protocol v1 · application/vnd.mutandae.v1+json</span>
+        </div>
+        <div class="protocol-cards">
+          <article class="protocol-card">
+            <h3>What it is</h3>
+            <p>A small, versioned, provider-neutral lifecycle and rotation protocol for machine identities — JSON over HTTP, media type <code>application/vnd.mutandae.v1+json</code>.</p>
+            <p>One canonical state machine (registered → active → renewing → retired), one event vocabulary (<code>identity.discovered</code>, <code>identity.registered</code>, <code>rotation.*</code>, <code>credential.delivered</code>/<code>credential.used</code>/<code>credential.revoked</code>, <code>identity.retired</code>), one audit shape — spoken identically by the Azure/Entra ID, AWS IAM, and GCP IAM adapters.</p>
+          </article>
+          <article class="protocol-card">
+            <h3>Why it exists</h3>
+            <p>Machine identities are fragmented across provider-specific APIs; ownership, expiry, and renewal health are invisible; credential renewal is manual, inconsistent, and operationally risky.</p>
+            <p>Without a shared contract, every governance tool reinvents provider plumbing and audits nothing the same way twice.</p>
+          </article>
+          <article class="protocol-card">
+            <h3>The value it brings</h3>
+            <p>Portability across clouds — the same lifecycle verbs over Azure, AWS, and GCP. Evidence for every change: each rotation, use, and revocation is an audited event with actor, outcome, and vault reference — never secret material.</p>
+            <p>Renewal health at a glance, and an honest open-core boundary: the protocol and frontend are public; production renewal engines stay private.</p>
+          </article>
+          <article class="protocol-card">
+            <h3>Try it</h3>
+            <pre class="protocol-code"><code>curl /api/v1/            # discovery
+curl /api/v1/configuration
+curl /api/v1/identities  # inventory</code></pre>
+            <p class="protocol-links"><a href="https://github.com/macel94/mutandae/blob/main/docs/protocol.md">Protocol spec ↗</a> · <a href="https://github.com/macel94/mutandae/blob/main/pkg/protocol/schema/mutandae.v1.json">JSON Schema ↗</a></p>
+          </article>
+        </div>
+      </section>
     </main>
 
     <footer class="footer">
@@ -118,7 +143,19 @@
       <span class="footer-providers">
         {{ range .Providers }}<span class="footer-provider">Provider adapter: <strong>{{ .Label }}</strong> · {{ .Scope }}</span>{{ end }}
       </span>
+      {{ if .ClusterVault }}<span class="footer-vault">Cluster vault: μVault (KV v2) · demo credentials persist in the cluster</span>{{ end }}
+      {{ if .Build.URL }}<a class="footer-build" href="{{ .Build.URL }}" title="GitHub commit that built this site">Built from {{ .Build.Short }} ↗{{ if .Build.Dirty }} · modified{{ end }}</a>{{ end }}
     </footer>
+  </div>
+
+  <div class="modal-backdrop" id="audit-modal" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="audit-modal-title">
+      <header class="modal-header">
+        <p class="section-kicker">Audit trail</p>
+        <button class="modal-close" type="button" aria-label="Close audit trail">×</button>
+      </header>
+      <div class="modal-body" id="audit-modal-content"></div>
+    </div>
   </div>
 </body>
 </html>

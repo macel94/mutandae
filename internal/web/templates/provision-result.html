@@ -11,8 +11,8 @@
   <div class="vault-delivery">
     <span class="vault-delivery-mark">✓</span>
     <div>
-      <strong>Delivered to {{ .Identity.Provider }} vault — it is now viewable again, any time, under audit.</strong>
-      <p class="muted">The secret was written to <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }} in the provider's native vault. Use the ✦ action in the inventory to retrieve it; every retrieval is logged as <code>credential.used</code>.</p>
+      <strong>Delivered to {{ .VaultName }} — it is now viewable again, any time, under audit.</strong>
+      <p class="muted">The secret was written to <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }} in {{ .VaultName }}. Use the ✦ action in the inventory to retrieve it; every retrieval is logged as <code>credential.used</code>.</p>
     </div>
   </div>
   {{ else }}
