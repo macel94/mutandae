@@ -70,6 +70,20 @@ type OneTimeSecretor interface {
 	ConsumeOneTimeSecret(provider string) string
 }
 
+// CommonVault is the cluster μVault capability: a provider-neutral,
+// control-plane-owned secret store that mirrors every delivered credential so
+// the credential stays retrievable even when the provider-native vault is not
+// configured or cannot serve a read. It shares VaultStore's three-operation
+// shape but is a distinct role: implementations belong to the cluster running
+// Mutandae, never to a cloud provider. The same redaction rules apply —
+// secret values are write-only on Store, returned only from Read, and
+// references must never carry secret material.
+type CommonVault interface {
+	StoreSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string) (protocol.VaultReference, error)
+	ReadSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, version string) (string, protocol.VaultReference, error)
+	RevokeSecret(ctx context.Context, identity protocol.MachineIdentity, keyID string) (protocol.VaultReference, error)
+}
+
 // ErrVaultUnsupported is returned when an operation needs a vault but the
 // adapter has none configured.
 var ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
