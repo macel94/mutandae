@@ -21,6 +21,7 @@ type Store struct {
 	mu          sync.RWMutex
 	adapter     Adapter
 	repository  Repository
+	commonVault CommonVault
 	identities  map[string]protocol.MachineIdentity
 	events      map[string][]protocol.LifecycleEvent
 	runs        map[string][]protocol.RotationRun
@@ -30,28 +31,55 @@ type Store struct {
 	watchDone   chan struct{}
 }
 
+// Option configures optional Store collaborators at construction time.
+type Option func(*storeOptions)
+
+// storeOptions carries the collaborators an Option may inject.
+type storeOptions struct {
+	commonVault CommonVault
+}
+
+// WithCommonVault binds the cluster μVault mirror to the store. A nil vault
+// (the default) leaves the store's behavior unchanged: credentials are
+// delivered only to the provider-native vault when the adapter supports it.
+func WithCommonVault(vault CommonVault) Option {
+	return func(options *storeOptions) {
+		if vault != nil {
+			options.commonVault = vault
+		}
+	}
+}
+
 // NewStore constructs an in-memory control-plane store bound to the given
 // provider adapter. NewPersistentStore adds Redis-backed state and pub/sub.
-func NewStore(ctx context.Context, now time.Time, adapter Adapter) (*Store, error) {
-	return newStore(ctx, now, adapter, nil)
+// Options may bind optional collaborators such as the cluster μVault mirror.
+func NewStore(ctx context.Context, now time.Time, adapter Adapter, options ...Option) (*Store, error) {
+	return newStore(ctx, now, adapter, nil, options)
 }
 
 // NewPersistentStore restores an environment-scoped snapshot from repository.
 // On first boot, it discovers the provider seed once and persists that state.
-func NewPersistentStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository) (*Store, error) {
-	return newStore(ctx, now, adapter, repository)
+func NewPersistentStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository, options ...Option) (*Store, error) {
+	return newStore(ctx, now, adapter, repository, options)
 }
 
-func newStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository) (*Store, error) {
+func newStore(ctx context.Context, now time.Time, adapter Adapter, repository Repository, options []Option) (*Store, error) {
 	if adapter == nil {
 		return nil, ErrAdapterRequired
 	}
+	opts := storeOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
 	store := &Store{
-		adapter:    adapter,
-		repository: repository,
-		identities: make(map[string]protocol.MachineIdentity),
-		events:     make(map[string][]protocol.LifecycleEvent),
-		runs:       make(map[string][]protocol.RotationRun),
+		adapter:     adapter,
+		repository:  repository,
+		commonVault: opts.commonVault,
+		identities:  make(map[string]protocol.MachineIdentity),
+		events:      make(map[string][]protocol.LifecycleEvent),
+		runs:        make(map[string][]protocol.RotationRun),
 	}
 	if repository != nil {
 		snapshot, err := repository.Load(ctx)
@@ -239,11 +267,27 @@ func (s *Store) Provision(ctx context.Context, req protocol.ProvisionRequest, no
 		req.RequestedByOrDefault(), protocol.OutcomeSuccess, nil, "")
 	s.mu.Unlock()
 	// Deliver the freshly issued credential to the selected provider-native
-	// vault. The one-time response disclosure stays intact; the vault copy is
-	// what makes later, audited retrieval (Use) possible.
-	if ref := s.deliverToVault(ctx, identity, resp.KeyID, resp.OneTimeSecret, now); ref != nil {
-		resp.Vault = ref
-		identity.Metadata = withVaultMetadata(identity.Metadata, ref)
+	// vault and mirror it to the cluster μVault. The one-time response
+	// disclosure stays intact; the vault copies are what make later, audited
+	// retrieval (Use) possible. Each delivery records its own independent
+	// audit event, and the native reference wins for the response whenever it
+	// exists — the cluster copy is the fallback reference and its own
+	// metadata entry.
+	nativeRef := s.deliverToVault(ctx, identity, resp.KeyID, resp.OneTimeSecret, now)
+	commonRef := s.mirrorToCommonVault(ctx, identity, resp.KeyID, resp.OneTimeSecret, now)
+	if nativeRef != nil {
+		resp.Vault = nativeRef
+		identity.Metadata = withVaultMetadata(identity.Metadata, nativeRef)
+	}
+	if commonRef != nil {
+		identity.Metadata = withCommonVaultMetadata(identity.Metadata, commonRef)
+		if nativeRef == nil {
+			// Without a native copy the cluster μVault copy is the one
+			// retrievable reference the response can honestly advertise.
+			resp.Vault = commonRef
+		}
+	}
+	if nativeRef != nil || commonRef != nil {
 		identity.UpdatedAt = now.UTC()
 		s.mu.Lock()
 		s.identities[identity.ID] = identity
@@ -428,12 +472,22 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		map[string]string{"key_id": identity.Credential.KeyID, "fingerprint": identity.Credential.Fingerprint}, runID)
 	s.mu.Unlock()
 	// Deliver the renewed credential to the vault as a new secret version so
-	// consumers of the old version can never be stranded. Failures surface as
-	// attention events and never roll back the completed rotation.
+	// consumers of the old version can never be stranded, mirroring it to the
+	// cluster μVault. Failures surface as attention events and never roll
+	// back the completed rotation. Each delivery records its own independent
+	// audit event; the metadata update substitutes the cluster copy when no
+	// native reference was produced.
 	if issuer, ok := s.adapter.(OneTimeSecretor); ok {
 		if renewed := issuer.ConsumeOneTimeSecret(identity.Provider.Provider); renewed != "" {
-			if ref := s.deliverToVault(ctx, identity, identity.Credential.KeyID, renewed, now); ref != nil {
-				identity.Metadata = withVaultMetadata(identity.Metadata, ref)
+			nativeRef := s.deliverToVault(ctx, identity, identity.Credential.KeyID, renewed, now)
+			commonRef := s.mirrorToCommonVault(ctx, identity, identity.Credential.KeyID, renewed, now)
+			if nativeRef != nil {
+				identity.Metadata = withVaultMetadata(identity.Metadata, nativeRef)
+			}
+			if commonRef != nil {
+				identity.Metadata = withCommonVaultMetadata(identity.Metadata, commonRef)
+			}
+			if nativeRef != nil || commonRef != nil {
 				identity.UpdatedAt = now
 				s.mu.Lock()
 				s.identities[identity.ID] = identity
@@ -500,11 +554,13 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 	}
 	s.mu.Unlock()
 	// Best-effort vault revocation: retirement must not leave a usable copy of
-	// the credential in the selected vault. The provider identity is already
-	// decommissioned, so a vault failure surfaces as an attention event only.
+	// the credential in the selected vault or in the cluster μVault. The
+	// provider identity is already decommissioned, so a vault failure
+	// surfaces as an attention event only.
 	if vault := s.vault(); vault != nil {
 		s.revokeFromVault(ctx, identity, operator, now)
 	}
+	s.revokeFromCommonVault(ctx, identity, now)
 
 	s.mu.Lock()
 	events := s.eventsSnapshotLocked(identity.ID)
@@ -562,25 +618,59 @@ func (s *Store) Use(ctx context.Context, req protocol.UseRequest, now time.Time)
 		return protocol.UseResponse{}, ErrAlreadyRetired
 	}
 	vault := s.vault()
-	if vault == nil {
+	if vault == nil && s.commonVault == nil {
 		return protocol.UseResponse{}, ErrVaultUnsupported
 	}
-	value, ref, err := vault.ReadSecret(ctx, identity, identity.Credential.KeyID, req.Version)
-	if err != nil {
-		return protocol.UseResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
+	var (
+		value     string
+		ref       protocol.VaultReference
+		nativeErr error
+	)
+	if vault != nil {
+		value, ref, nativeErr = vault.ReadSecret(ctx, identity, identity.Credential.KeyID, req.Version)
+	}
+	fromClusterVault := false
+	if nativeErr != nil || vault == nil {
+		if vault != nil && !errors.Is(nativeErr, ErrVaultUnsupported) {
+			// A native outage must not silently switch vaults: only an
+			// intentionally unsupported native capability falls back.
+			return protocol.UseResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, nativeErr)
+		}
+		if s.commonVault == nil {
+			return protocol.UseResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, nativeErr)
+		}
+		// The provider-native vault cannot serve this read, so fall back to
+		// the cluster μVault copy recorded at delivery time.
+		var err error
+		value, ref, err = s.commonVault.ReadSecret(ctx, identity, identity.Credential.KeyID, req.Version)
+		if err != nil {
+			return protocol.UseResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
+		}
+		fromClusterVault = true
 	}
 	now = now.UTC()
-	details := map[string]string{
-		"key_id":        identity.Credential.KeyID,
-		"vault_secret":  ref.SecretName,
-		"vault_version": ref.Version,
-	}
-	if ref.URL != "" {
-		details["vault_url"] = ref.URL
+	details := map[string]string{"key_id": identity.Credential.KeyID}
+	summary := ""
+	if fromClusterVault {
+		details["vault_kind"] = commonVaultKind
+		details["common_vault_secret"] = ref.SecretName
+		if ref.Version != "" {
+			details["common_vault_version"] = ref.Version
+		}
+		if ref.URL != "" {
+			details["common_vault_url"] = ref.URL
+		}
+		summary = "Credential retrieved from the cluster μVault vault by " + req.RequestedByOrDefault()
+	} else {
+		details["vault_secret"] = ref.SecretName
+		details["vault_version"] = ref.Version
+		if ref.URL != "" {
+			details["vault_url"] = ref.URL
+		}
+		summary = "Credential retrieved from the " + providerVaultLabel(identity.Provider.Provider) + " by " + req.RequestedByOrDefault()
 	}
 	s.mu.Lock()
-	s.addEvent(identity.ID, now, protocol.EventCredentialUsed,
-		"Credential retrieved from the "+providerVaultLabel(identity.Provider.Provider)+" by "+req.RequestedByOrDefault(),
+	s.addEvent(identity.ID, now, protocol.EventCredentialUsed, summary,
 		req.RequestedByOrDefault(), protocol.OutcomeSuccess, details, "")
 	persistErr := s.persistLocked(ctx)
 	s.mu.Unlock()
@@ -615,6 +705,27 @@ func withVaultMetadata(metadata protocol.Metadata, ref *protocol.VaultReference)
 	return metadata
 }
 
+// withCommonVaultMetadata records the cluster μVault location of the current
+// credential on the identity, leaving any provider-native vault keys intact:
+// an identity mirrored to both vaults carries both key sets. Only names,
+// URLs, and versions are stored — never secrets.
+func withCommonVaultMetadata(metadata protocol.Metadata, ref *protocol.VaultReference) protocol.Metadata {
+	if ref == nil {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = protocol.Metadata{}
+	}
+	if ref.URL != "" {
+		metadata[metaCommonVaultURL] = ref.URL
+	}
+	metadata[metaCommonVaultSecret] = ref.SecretName
+	if ref.Version != "" {
+		metadata[metaCommonVaultVersion] = ref.Version
+	}
+	return metadata
+}
+
 func (s *Store) eventsSnapshotLocked(id string) []protocol.LifecycleEvent {
 	return append([]protocol.LifecycleEvent(nil), s.events[id]...)
 }
@@ -625,6 +736,19 @@ func (s *Store) vault() VaultStore {
 	vault, _ := s.adapter.(VaultStore)
 	return vault
 }
+
+// metaCommonVault* are the cluster μVault counterparts of the native vault
+// metadata keys. They name the mirrored secret, version, and URL — never
+// secret material — so consumers can distinguish the cluster copy from the
+// provider-native copy.
+const (
+	metaCommonVaultURL     = "common_vault_url"
+	metaCommonVaultSecret  = "common_vault_secret"
+	metaCommonVaultVersion = "common_vault_version"
+)
+
+// commonVaultKind names the cluster μVault in audit event details.
+const commonVaultKind = "cluster-mutandae-vault"
 
 // vaultMetadataKeys are the provider-neutral identity metadata keys recording
 // where the current credential lives. They name the vault, secret, and
@@ -676,6 +800,82 @@ func (s *Store) deliverToVault(ctx context.Context, identity protocol.MachineIde
 		"Credential stored in the "+providerVaultLabel(identity.Provider.Provider)+" ("+ref.SecretName+"), retrievable on demand",
 		protocol.ActorProviderAdapter, protocol.OutcomeSuccess, details, "")
 	return &ref
+}
+
+// mirrorToCommonVault stores a freshly issued credential in the cluster μVault
+// and records its own credential.delivered audit event, independent of the
+// provider-native delivery. It never fails the calling lifecycle operation: a
+// mirror outage surfaces as an attention event while the identity remains
+// governed, an intentionally unsupported μVault capability (like a disabled
+// native vault) is silently skipped, and an unconfigured μVault does nothing.
+func (s *Store) mirrorToCommonVault(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string, now time.Time) *protocol.VaultReference {
+	if s.commonVault == nil || strings.TrimSpace(secret) == "" {
+		return nil
+	}
+	now = now.UTC()
+	ref, err := s.commonVault.StoreSecret(ctx, identity, keyID, secret)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		if errors.Is(err, ErrVaultUnsupported) {
+			return nil
+		}
+		s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
+			"Cluster vault delivery failed: the credential was issued but not stored in the cluster μVault vault",
+			protocol.ActorProviderAdapter, protocol.OutcomeAttention,
+			map[string]string{"key_id": keyID, "vault_kind": commonVaultKind, "error": err.Error()}, "")
+		return nil
+	}
+	details := map[string]string{
+		"key_id":               keyID,
+		"vault_kind":           commonVaultKind,
+		"common_vault_secret":  ref.SecretName,
+		"common_vault_version": ref.Version,
+	}
+	if ref.URL != "" {
+		details["common_vault_url"] = ref.URL
+	}
+	s.addEvent(identity.ID, now, protocol.EventCredentialDelivered,
+		"Credential stored in the cluster μVault vault ("+ref.SecretName+"), retrievable on demand",
+		protocol.ActorProviderAdapter, protocol.OutcomeSuccess, details, "")
+	return &ref
+}
+
+// revokeFromCommonVault disables the cluster μVault copy of a retired
+// credential and records its own credential.revoked audit event, independent
+// of the provider-native revocation. It is best-effort like the native path:
+// a failure surfaces as an attention event, an unsupported capability is
+// silently skipped, and an unconfigured μVault does nothing.
+func (s *Store) revokeFromCommonVault(ctx context.Context, identity protocol.MachineIdentity, now time.Time) {
+	if s.commonVault == nil {
+		return
+	}
+	now = now.UTC()
+	ref, err := s.commonVault.RevokeSecret(ctx, identity, identity.Credential.KeyID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		if errors.Is(err, ErrVaultUnsupported) {
+			return
+		}
+		s.addEvent(identity.ID, now, protocol.EventCredentialRevoked,
+			"Cluster vault revocation failed: "+err.Error(),
+			protocol.ActorProviderAdapter, protocol.OutcomeAttention,
+			map[string]string{"key_id": identity.Credential.KeyID, "vault_kind": commonVaultKind, "error": err.Error()}, "")
+		return
+	}
+	details := map[string]string{
+		"key_id":               identity.Credential.KeyID,
+		"vault_kind":           commonVaultKind,
+		"common_vault_secret":  ref.SecretName,
+		"common_vault_version": ref.Version,
+	}
+	if ref.URL != "" {
+		details["common_vault_url"] = ref.URL
+	}
+	s.addEvent(identity.ID, now, protocol.EventCredentialRevoked,
+		"Cluster vault copy removed (μVault)",
+		protocol.ActorProviderAdapter, protocol.OutcomeSuccess, details, "")
 }
 
 // providerVaultLabel names the provider-native vault in audit summaries.
