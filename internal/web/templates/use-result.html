@@ -3,7 +3,7 @@
   <div class="panel-heading">
     <div>
       <p class="section-kicker">Credential use · audited</p>
-      <h2>{{ .Identity.Name }}</h2>
+      <h2 id="audit-modal-title">{{ .Identity.Name }}</h2>
       <p class="muted">{{ .Identity.Owner }} · {{ .Identity.Workload }}</p>
     </div>
     <span class="badge badge-healthy"><span class="badge-dot"></span>Retrieved</span>
@@ -14,7 +14,7 @@
     <div><span>Key ID</span><strong><code>{{ .KeyID }}</code></strong></div>
   </div>
   {{ if .Vault }}
-  <p class="muted">Retrieved from <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }}. This retrieval was logged as a <code>credential.used</code> lifecycle event with the vault reference and actor — check the audit trail.</p>
+  <p class="muted">Retrieved from <code>{{ .Vault.SecretName }}</code>{{ if .Vault.Version }} (version {{ shortVersion .Vault.Version }}){{ end }} in {{ .VaultName }}. This retrieval was logged as a <code>credential.used</code> lifecycle event with the vault reference and actor — check the audit trail.</p>
   {{ end }}
   {{ if .Secret }}
   <label class="secret-disclosure">

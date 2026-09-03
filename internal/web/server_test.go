@@ -203,7 +203,17 @@ func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 		"Multi-cloud simulator",
 		"hx-post=\"/identities/payments-api/rotate\"",
 		"hx-post=\"/identities/payments-api/retire\"",
-		"x-data=\"{ filter: '', status: 'all', navOpen: false }\"",
+		"hx-target=\"#audit-modal-content\"",
+		"id=\"audit-modal\"",
+		"role=\"dialog\"",
+		"aria-modal=\"true\"",
+		"aria-labelledby=\"audit-modal-title\"",
+		"aria-label=\"Close audit trail\"",
+		"id=\"audit-modal-content\"",
+		"id=\"protocol\"",
+		"href=\"#protocol\"",
+		"What is the μTandae Protocol?",
+		"src=\"/static/app.js\"",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("dashboard does not contain %q", expected)
