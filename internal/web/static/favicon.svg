@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Mutandae μTandae mark: stylized lowercase μ, cinnabar accent on dark ink -->
+  <rect width="32" height="32" rx="7" fill="#17262d"/>
+  <g fill="none" stroke="#d65a3a" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left stem with descender tail (the mu silhouette) -->
+    <path d="M 10.6 6.4 V 24.2"/>
+    <!-- renewal bowl of the u -->
+    <path d="M 10.6 12.2 C 10.6 17.4 12.4 19.2 15.9 19.2 C 19.4 19.2 21.2 17.4 21.2 12.2"/>
+    <!-- right stem -->
+    <path d="M 21.2 8 V 19.2"/>
+  </g>
+  <!-- teal renewal dot: continuity of lifecycle -->
+  <circle cx="15.9" cy="24.2" r="1.9" fill="#177d78"/>
+</svg>

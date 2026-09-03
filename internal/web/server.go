@@ -194,6 +194,9 @@ func (s *Server) routes() http.Handler {
 	// Health probes.
 	mux.HandleFunc("GET /livez", s.health)
 	mux.HandleFunc("GET /readyz", s.health)
+	// Favicon: browsers request /favicon.ico even without an HTML link.
+	mux.HandleFunc("GET /favicon.ico", s.faviconICO)
+	mux.HandleFunc("GET /favicon.svg", s.faviconSVG)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
 	return securityHeaders(throttle(s.readLimiter, s.writeLimiter, s.createLimiter, mux))
 }
@@ -885,6 +888,18 @@ func (s *Server) writeError(w http.ResponseWriter, err error, defaultStatus int)
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// faviconICO serves the μTandae mark as a multi-size ICO fallback.
+func (s *Server) faviconICO(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/x-icon")
+	http.ServeFileFS(w, r, s.static, "favicon.ico")
+}
+
+// faviconSVG serves the μTandae mark as a scalable SVG icon.
+func (s *Server) faviconSVG(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	http.ServeFileFS(w, r, s.static, "favicon.svg")
 }
 
 func operatorOrDefault(r *http.Request) string {
