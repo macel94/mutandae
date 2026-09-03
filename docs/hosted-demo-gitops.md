@@ -30,6 +30,21 @@ store, not a durable event log. Restarting Redis or deleting an environment
 snapshot resets that environment to the simulated Azure seed on next startup.
 Do not put real Azure credentials, customer data, or secrets into the demo.
 
+## Cluster μVault (common demo vault)
+
+Besides the provider-native vaults (Azure Key Vault, AWS Secrets Manager, GCP
+Secret Manager) the cluster runs a common vault: HashiCorp Vault 1.21.4 as
+StatefulSet `mutandae-vault` in the `mutandae` namespace, raft storage on a
+2Gi Longhorn PVC, KV v2 engine mounted at `mutandae/`. Both application
+environments mirror every delivered credential into it under their own prefix
+(`mutandae/demo/live/…`, `mutandae/demo/preview/…`) using a token scoped to
+the `mutandae-demo` policy; access is restricted by NetworkPolicy to the two
+application pods. The unseal key share lives in the SOPS-encrypted
+`vault-secret.yaml` of this repository and the sidecar container re-unseals
+the raft store automatically after restarts. The one-time initialization
+runbook lives in [live-demo.md](live-demo.md#cluster-μvault-runbook) in the
+application repository.
+
 PostgreSQL is intentionally not provisioned in this iteration. The application
 owns the `lifecycle.Repository` boundary so a future PostgreSQL repository can
 add transactional durability, migrations, immutable event storage, and stronger
@@ -40,7 +55,7 @@ concurrency controls without changing the frontend or protocol.
 | Change | Repository | Reason |
 |---|---|---|
 | Go code, templates, image, Redis client, application env contract | `mutandae` | Application source and publish workflow |
-| Redis StatefulSet/PVC/Secret, preview/live Deployments, Services, routing, TLS, NetworkPolicies, backup contract, Flux root overlay | `belacca-gitops` | Cluster resources and GitOps source of truth |
+| Redis StatefulSet/PVC/Secret, μVault (HashiCorp Vault) StatefulSet/PVC/config/unseal Secret, preview/live Deployments, Services, routing, TLS, NetworkPolicies, backup contract, Flux root overlay | `belacca-gitops` | Cluster resources and GitOps source of truth |
 | Parent submodule pointer | `belacca-platform` | Workspace bookkeeping only; it never deploys by itself |
 
 A parent push is not a deployment. Push the owning child repository first, then

@@ -82,6 +82,21 @@ func main() {
 		}
 	}
 
+	// Cluster-local μVault (HashiCorp Vault KV v2): the common vault where
+	// demo credentials persist in the cluster. Wired when VAULT_ADDR and
+	// VAULT_TOKEN are both present; in the live environment a half-wired
+	// vault address/token pair is a hard error so the demo never advertises
+	// more than it can do.
+	commonVault, err := wireCommonVaultStore(now)
+	if err != nil {
+		log.Fatalf("wire cluster μVault store: %v", err)
+	}
+	var storeOptions []lifecycle.Option
+	if commonVault != nil {
+		storeOptions = append(storeOptions, lifecycle.WithCommonVault(commonVault))
+		provisionFeatures = append(provisionFeatures, "vault:cluster")
+	}
+
 	adapter, err := provider.NewMultiProvider(
 		azureAdapter,
 		awsAdapter,
@@ -102,9 +117,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("create Redis repository: %v", err)
 		}
-		store, err = lifecycle.NewPersistentStore(context.Background(), startedAt, adapter, repository)
+		store, err = lifecycle.NewPersistentStore(context.Background(), startedAt, adapter, repository, storeOptions...)
 	} else {
-		store, err = lifecycle.NewStore(context.Background(), startedAt, adapter)
+		store, err = lifecycle.NewStore(context.Background(), startedAt, adapter, storeOptions...)
 	}
 	if err != nil {
 		log.Fatalf("initialise control plane: %v", err)
@@ -131,8 +146,17 @@ func main() {
 			Environment: environment,
 			Persistence: persistenceLabel(repository),
 			Provider:    "multi-cloud (azure-entra " + azureLabel + ", aws-iam " + awsLabel + ", gcp-iam " + gcpLabel + ")",
-			Clock:       now,
-			Features:    provisionFeatures,
+			// Public, non-secret tenant scopes: the footer names the exact
+			// Azure tenant, AWS account, and GCP project each adapter
+			// governs. Identifiers of this kind are not credentials; they
+			// already ride in tokens and ARNs.
+			Providers: []config.ProviderDescriptor{
+				{Kind: "azure-entra", Label: "Azure / Entra ID", Scope: "tenant " + azureScopeTenantID(tenantID)},
+				{Kind: "aws-iam", Label: "AWS IAM", Scope: "account " + envString("AWS_ACCOUNT_ID", awsAccountID)},
+				{Kind: "gcp-iam", Label: "GCP IAM", Scope: "project " + envString("GCP_PROJECT_ID", gcpProjectID)},
+			},
+			Clock:    now,
+			Features: provisionFeatures,
 		},
 		Clock:  now,
 		Logger: log.Default(),
@@ -306,6 +330,39 @@ func wireAzureAdapter(now func() time.Time, vaultURL, vaultPrefix string, vaultE
 		return nil, "", false, err
 	}
 	return adapter, "real", true, nil
+}
+
+// azureScopeTenantID resolves the Azure tenant identifier the demo actually
+// governs: the real tenant when a Graph credential is wired, the synthetic
+// simulator label otherwise.
+func azureScopeTenantID(fallback string) string {
+	if tenantID := strings.TrimSpace(os.Getenv("AZURE_TENANT_ID")); tenantID != "" {
+		return tenantID
+	}
+	return fallback
+}
+
+// wireCommonVaultStore returns the cluster-local HashiCorp Vault KV v2 store
+// when VAULT_ADDR and VAULT_TOKEN are both present, and nil (feature off)
+// otherwise. A half-configured pair is a misconfiguration: in the live
+// environment it fails startup, elsewhere it logs and disables the mirror.
+func wireCommonVaultStore(now func() time.Time) (lifecycle.CommonVault, error) {
+	addr := strings.TrimSpace(os.Getenv("VAULT_ADDR"))
+	token := os.Getenv("VAULT_TOKEN")
+	if addr == "" && token == "" {
+		return nil, nil
+	}
+	store, err := provider.NewHashiCorpVault(provider.HashiCorpVaultConfig{
+		Addr:   addr,
+		Token:  token,
+		Mount:  envString("VAULT_MOUNT", "mutandae"),
+		Prefix: envString("VAULT_SECRET_PREFIX", "demo"),
+		Now:    now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func isLive() bool {

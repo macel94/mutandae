@@ -26,11 +26,20 @@
 
   // filterRows applies the active search text and status filter to every
   // inventory row. It re-reads the rows each time, so it stays correct after
-  // HTMX replaces the table.
+  // HTMX replaces the table, and it surfaces the client-side empty row when
+  // the active filters hide everything.
   function filterRows() {
     var rows = document.querySelectorAll("#identity-list tbody tr[data-search]");
+    var visible = 0;
     for (var i = 0; i < rows.length; i++) {
       rows[i].hidden = !rowMatches(rows[i]);
+      if (!rows[i].hidden) {
+        visible++;
+      }
+    }
+    var emptyRow = document.querySelector("#identity-list tbody tr.empty-row");
+    if (emptyRow !== null) {
+      emptyRow.hidden = visible > 0;
     }
   }
 
@@ -116,8 +125,24 @@
     }
   });
 
-  // Escape closes; Tab keeps focus inside the dialog while it is open.
+  // Escape closes; "/" focuses the search box from anywhere outside a text
+  // field; Tab keeps focus inside the dialog while it is open.
   document.addEventListener("keydown", function (event) {
+    if (event.key === "/" && !modalIsOpen()) {
+      var target = event.target;
+      var typing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target.isContentEditable && target.isContentEditable === true);
+      if (!typing) {
+        event.preventDefault();
+        if (searchBox !== null) {
+          searchBox.focus();
+        }
+      }
+      return;
+    }
     if (!modalIsOpen()) {
       return;
     }

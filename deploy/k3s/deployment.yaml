@@ -114,6 +114,20 @@ spec:
                   name: mutandae-provider-credentials
                   key: AZURE_KEY_VAULT_PREFIX
                   optional: true
+            # Cluster-local μVault (HashiCorp Vault KV v2): the common vault
+            # where demo credentials persist under audit. The token key may be
+            # absent until the vault bootstrap runbook has run; delivery then
+            # stays off and the UI reports the absence honestly.
+            - name: VAULT_ADDR
+              value: http://mutandae-vault.mutandae.svc.cluster.local:8200
+            - name: VAULT_SECRET_PREFIX
+              value: demo/live
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mutandae-provider-credentials
+                  key: VAULT_TOKEN
+                  optional: true
           resources:
             requests:
               cpu: 10m

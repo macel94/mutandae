@@ -121,9 +121,18 @@ The governor principals need these extra, namespace-scoped permissions:
   with an IAM condition `resource.name.startsWith("projects/_/secrets/mutandae-demo-")`
   (Secret Manager API must be enabled in the project).
 - **Azure** — the `mutandae-eval` application gains the **Key Vault Secrets
-  Officer** role on the existing demo vault referenced by
-  `AZURE_KEY_VAULT_URL`. Graph permissions do not grant vault access, so this
-  role is the only new grant.
+  Officer** role on the demo vault referenced by `AZURE_KEY_VAULT_URL`
+  (provisioned as `mutandae-demo-kv-7f3a` in `mutandae-demo-rg`, westus2,
+  RBAC-authorized; the role is assigned to the service principal object id
+  `f6dd3b2d-e7ac-4853-a7a9-e35216a3bc68`). Graph permissions do not grant
+  vault access, so this role is the only new grant.
+- **Cluster μVault** — the control plane also mirrors every demo credential
+  into the cluster-local HashiCorp Vault (KV v2, path prefix
+  `mutandae/demo/<environment>/…`) using a token scoped to the
+  `mutandae-demo` policy. See [Cluster μVault runbook](#cluster-μvault-runbook).
+  The application token can only create/read/delete secrets under that
+  prefix; it is stored in the `mutandae-provider-credentials` Secret alongside
+  the cloud credentials and is never committed to git.
 
 The vault boundary does not weaken the core guarantee: these permissions can
 only create/read/delete secrets under the `mutandae-demo-*` namespace, and the
@@ -218,12 +227,57 @@ failure, and the provision result shows the explicit "no vault copy" state.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `MUTANDAE_VAULT` | `auto` | `off` disables vault delivery everywhere. |
-| `AZURE_KEY_VAULT_URL` | unset | Enables azure-entra delivery against this existing vault (`https://*.vault.azure.net`). |
+| `AZURE_KEY_VAULT_URL` | unset | Enables azure-entra delivery against this vault (`https://mutandae-demo-kv-7f3a.vault.azure.net/` in the live deployment). |
 | `AZURE_KEY_VAULT_PREFIX` | `mutandae` | Key Vault secret-name namespace prefix. |
+| `VAULT_ADDR` | unset | Enables cluster μVault mirroring when set together with `VAULT_TOKEN`. |
+| `VAULT_TOKEN` | unset | Token for the cluster μVault, scoped to the `mutandae-demo` policy. |
+| `VAULT_SECRET_PREFIX` | `demo` | Path prefix inside the cluster μVault mount; the deployments use `demo/live` and `demo/preview`. |
 
-AWS and GCP vault delivery activate with their real adapters; the delivery
-result is surfaced honestly in the UI (delivered version or an explicit
-"no vault copy" warning) and audited either way.
+AWS and GCP vault delivery activate with their real adapters, and Azure
+Key Vault delivery activates with `AZURE_KEY_VAULT_URL`; the delivery result
+is surfaced honestly in the UI (delivered version or an explicit "no vault
+copy" warning) and audited either way. When `VAULT_ADDR` and `VAULT_TOKEN`
+are set, every delivered credential is additionally mirrored into the cluster
+μVault and audited with `vault_kind: cluster-mutandae-vault`; the inventory
+shows both copies.
+
+## Cluster μVault runbook
+
+The common vault is a single-node HashiCorp Vault 1.21.4 StatefulSet
+(`mutandae-vault-0`) with raft storage on a Longhorn PVC, deployed and
+reconciled by Flux from the `belacca-gitops` repository. Credentials survive
+pod restarts; the SOPS-managed unseal key plus the unseal sidecar re-open the
+raft store automatically after a restart. Initialization is deliberately
+manual so the raft store is never silently re-created:
+
+```sh
+# one-time initialization (records the unseal key share and root token)
+k3s kubectl -n mutandae exec mutandae-vault-0 -c vault -- \
+  vault operator init -key-shares=1 -key-threshold=1 -format=json
+# store the unseal key SOPS-encrypted in belacca-gitops
+# (clusters/belacca-production/mutandae/vault-secret.yaml); the sidecar
+# unseals from it automatically after any restart
+k3s kubectl -n mutandae exec mutandae-vault-0 -c vault -- \
+  vault operator unseal <UNSEAL_KEY>
+# engine, policy, and application token
+k3s kubectl -n mutandae exec mutandae-vault-0 -c vault -- \
+  env VAULT_TOKEN=<ROOT_TOKEN> vault secrets enable -path=mutandae kv-v2
+k3s kubectl -n mutandae exec mutandae-vault-0 -c vault -- \
+  env VAULT_TOKEN=<ROOT_TOKEN> vault policy write mutandae-demo -
+# policy: create/update/read on mutandae/data/demo/* and read/delete on
+# mutandae/metadata/demo/* — nothing else
+k3s kubectl -n mutandae exec mutandae-vault-0 -c vault -- \
+  env VAULT_TOKEN=<ROOT_TOKEN> vault token create \
+  -policy=mutandae-demo -orphan -ttl=8760h
+# then patch the mutandae-provider-credentials Secret with VAULT_TOKEN and
+# restart the application deployments
+```
+
+Recovery is automatic: on a fresh pod the sidecar polls `vault status` and
+unseals with the key share from the Secret. If the PVC is lost, the raft data
+is gone and the initialization steps above are simply repeated. Rotate the
+application token by creating a replacement and patching the Secret; revoke
+the old token afterwards.
 
 ## Demo-only mode
 

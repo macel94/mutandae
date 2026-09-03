@@ -49,7 +49,7 @@ The MVP is intentionally narrow:
 - One renewal/rotation story
 - One credible open-core architecture
 
-The public demo adds a live **New identity** flow on top: pick an identity type (Azure / Entra ID, AWS IAM, or GCP IAM) and the control plane creates a real zero-permission identity in that tenant, delivers the credential into that cloud's native vault (Azure Key Vault, AWS Secrets Manager, or GCP Secret Manager), and makes the secret retrievable on demand — every use, renewal, and revocation is an audited lifecycle event. See the [live demo](docs/live-demo.md) and [multi-cloud demo](docs/multi-cloud-demo.md) documents.
+The public demo adds a live **New identity** flow on top: pick an identity type (Azure / Entra ID, AWS IAM, or GCP IAM) and the control plane creates a real zero-permission identity in that tenant, delivers the credential into that cloud's native vault (Azure Key Vault, AWS Secrets Manager, or GCP Secret Manager) and mirrors it into the cluster-local μVault (HashiCorp Vault on the demo k3s cluster), and makes the secret retrievable on demand — every use, renewal, and revocation is an audited lifecycle event. See the [live demo](docs/live-demo.md) and [multi-cloud demo](docs/multi-cloud-demo.md) documents.
 
 The public project will contain the frontend, shared protocol, public abstractions, and a very small control-plane shell. Provider-specific production renewal engines, secure managed execution, and advanced integrations remain private/commercial.
 
@@ -95,7 +95,8 @@ See [Brand Decisions](docs/brand-decisions.md).
     ├── aws-integration.md      # AWS IAM simulator + real-world integration contract
     ├── gcp-integration.md      # GCP IAM simulator + real-world integration contract
     ├── integration-testing.md  # Credentials/permissions needed for real cloud evaluation
-    ├── hosted-demo-gitops.md   # Hosted preview/live Redis + GitOps runbook
+    ├── hosted-demo-gitops.md   # Hosted preview/live Redis + μVault + GitOps runbook
+    ├── demo-requirements-2026-09.md # 2026-09 demo upgrade requirements and decisions
     ├── brand-decisions.md
     ├── implementation.md
     ├── mvp-objectives.md
@@ -141,7 +142,8 @@ configurable with `MUTANDAE_TENANT`, `MUTANDAE_AWS_ACCOUNT`,
 See [docs/multi-cloud-demo.md](docs/multi-cloud-demo.md) for the synthetic
 walkthrough and protocol endpoints, with the per-provider details in
 [docs/azure-demo.md](docs/azure-demo.md), [docs/aws-integration.md](docs/aws-integration.md), and [docs/gcp-integration.md](docs/gcp-integration.md). See [docs/azure-integration.md](docs/azure-integration.md)
-for the optional real-tenant flow, vault prerequisites, and cleanup procedure. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
+for the optional real-tenant flow, vault prerequisites, the cluster μVault
+bootstrap runbook, and cleanup procedure. See [docs/hosted-demo-gitops.md](docs/hosted-demo-gitops.md)
 for the replicable hosted deployment. See [docs/protocol.md](docs/protocol.md)
 for the protocol specification, [docs/providers.md](docs/providers.md) for the
 provider adapter reference, and the machine-readable

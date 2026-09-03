@@ -34,6 +34,7 @@
     {{ else }}
     <tr><td class="empty-row" colspan="7">No identities match this view. Create one with the New identity button above.</td></tr>
     {{ end }}
+    {{ if .Identities }}<tr class="empty-row" hidden><td colspan="7">No identities match this view. Adjust the search or status filter above.</td></tr>{{ end }}
   </tbody>
 </table>
 {{ end }}

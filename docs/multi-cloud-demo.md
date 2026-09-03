@@ -229,7 +229,10 @@ curl -s -X POST http://localhost:8080/api/v1/identities/metrics-publisher/retire
    identity is provisioned for real with zero permissions, its credential is
    delivered to the selected cloud's native vault (`credential.delivered`
    event, vault name/version shown in the result and in the inventory's Vault
-   column), and the one-time secret is disclosed exactly once in the response.
+   column), mirrored into the cluster-local μVault (HashiCorp Vault KV v2 in
+   the demo k3s cluster, path prefix `mutandae/demo/<environment>/…`, audited
+   with `vault_kind: cluster-mutandae-vault`), and the one-time secret is
+   disclosed exactly once in the response.
 3. **Use the credential again — audited.** Press the inventory's ✦ action:
    the current vault version is retrieved and shown, and a
    `credential.used` event with the actor and vault reference lands in the

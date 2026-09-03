@@ -382,9 +382,12 @@ func (v *HashiCorpVault) expiresAt() time.Time {
 }
 
 // vaultPath derives and validates the secret path below the mount:
-// <prefix>/<sanitized identity>/<sanitized keyID>. Like the AWS and GCP
-// vaults, access is refused outside the mutandae-demo-* namespace before any
-// sanitization, keeping the demo trust boundary anchored to the true name.
+// <prefix>/<sanitized identity>. Like the AWS and GCP vaults, rotations write
+// new versions under one auditable per-identity secret — the key id lives in
+// the stored payload, never in the path — so revocation removes every version
+// of the credential at once. Access is refused outside the mutandae-demo-*
+// namespace before any sanitization, keeping the demo trust boundary anchored
+// to the true name.
 func (v *HashiCorpVault) vaultPath(identity protocol.MachineIdentity, keyID string) (string, string, error) {
 	if !isDemoName(identity.Name) {
 		return "", "", fmt.Errorf("hashicorp vault: refusing vault access outside the %s* namespace", demoPrefix)
@@ -397,11 +400,7 @@ func (v *HashiCorpVault) vaultPath(identity protocol.MachineIdentity, keyID stri
 	if effectiveKeyID == "" {
 		effectiveKeyID = "current"
 	}
-	key := vaultSanitizeSegment(effectiveKeyID)
-	if key == "" {
-		return "", "", errors.New("hashicorp vault: credential key id sanitizes to an empty path segment")
-	}
-	return v.prefix + "/" + name + "/" + key, effectiveKeyID, nil
+	return v.prefix + "/" + name, effectiveKeyID, nil
 }
 
 // vaultSanitizeSegment maps a wire-provided name onto a Vault-safe path

@@ -285,7 +285,7 @@ func TestHashiCorpVaultStoreSecret(t *testing.T) {
 	client := newVaultTestClient(t, server)
 	identity := vaultTestIdentity()
 	secret := "store-secret-value"
-	wantPath := "mutandae/" + identity.Name + "/access-key-1"
+	wantPath := "mutandae/" + identity.Name
 	wantPayload := map[string]string{
 		"secret":    secret,
 		"key_id":    "access-key-1",
@@ -327,7 +327,7 @@ func TestHashiCorpVaultStoreRequestShape(t *testing.T) {
 	t.Parallel()
 	identity := vaultTestIdentity()
 	secret := "shape-secret-value"
-	wantPath := "/v1/" + vaultFakeMount + "/data/mutandae/" + identity.Name + "/access-key-1"
+	wantPath := "/v1/" + vaultFakeMount + "/data/mutandae/" + identity.Name
 	var sawRequest bool
 	handler := func(w http.ResponseWriter, r *http.Request) bool {
 		sawRequest = true
@@ -404,19 +404,19 @@ func TestHashiCorpVaultStoreSanitizesName(t *testing.T) {
 			name:       "weird characters become dashes",
 			identity:   "mutandae-demo-Web Server #1!",
 			keyID:      "access-key-1",
-			wantSecret: "secret/mutandae/mutandae-demo-Web-Server--1/access-key-1",
+			wantSecret: "secret/mutandae/mutandae-demo-Web-Server--1",
 		},
 		{
 			name:       "over-long name is capped at 63 characters",
 			identity:   "mutandae-demo-" + strings.Repeat("a", 70),
 			keyID:      "k",
-			wantSecret: "secret/mutandae/" + "mutandae-demo-" + strings.Repeat("a", 49) + "/k",
+			wantSecret: "secret/mutandae/" + "mutandae-demo-" + strings.Repeat("a", 49),
 		},
 		{
 			name:       "empty key id defaults to current",
 			identity:   "mutandae-demo-orders",
 			keyID:      "",
-			wantSecret: "secret/mutandae/mutandae-demo-orders/current",
+			wantSecret: "secret/mutandae/mutandae-demo-orders",
 		},
 	}
 	for _, tc := range cases {
@@ -471,7 +471,7 @@ func TestHashiCorpVaultReadRoundTrip(t *testing.T) {
 		if ref.Version != "2" {
 			t.Errorf("ReadSecret(version=%q) ref.Version = %q, want 2 from response metadata", version, ref.Version)
 		}
-		if ref.SecretName != "secret/mutandae/"+identity.Name+"/access-key-1" {
+		if ref.SecretName != "secret/mutandae/"+identity.Name {
 			t.Errorf("ref.SecretName = %q, want the mount/prefixed path", ref.SecretName)
 		}
 	}
@@ -644,7 +644,7 @@ func TestHashiCorpVaultRevokeSecret(t *testing.T) {
 	identity := vaultTestIdentity()
 	wantRef := protocol.VaultReference{
 		URL:        server.URL,
-		SecretName: "secret/mutandae/" + identity.Name + "/access-key-1",
+		SecretName: "secret/mutandae/" + identity.Name,
 		Version:    "",
 	}
 	if _, err := client.StoreSecret(context.Background(), identity, "access-key-1", "revoke-me"); err != nil {
@@ -656,7 +656,7 @@ func TestHashiCorpVaultRevokeSecret(t *testing.T) {
 		t.Fatalf("RevokeSecret(): %v", err)
 	}
 	assertVaultReference(t, ref, wantRef)
-	if got := fake.storedCount("mutandae/" + identity.Name + "/access-key-1"); got != 0 {
+	if got := fake.storedCount("mutandae/" + identity.Name); got != 0 {
 		t.Errorf("fake still stores %d versions after revoke, want 0", got)
 	}
 
@@ -673,7 +673,7 @@ func TestHashiCorpVaultRevokeSecret(t *testing.T) {
 func TestHashiCorpVaultRevokeRequestShape(t *testing.T) {
 	t.Parallel()
 	identity := vaultTestIdentity()
-	wantPath := "/v1/" + vaultFakeMount + "/metadata/mutandae/" + identity.Name + "/access-key-1"
+	wantPath := "/v1/" + vaultFakeMount + "/metadata/mutandae/" + identity.Name
 	var sawMethod, sawPath bool
 	server, fake := newVaultFake(t)
 	fake.fail = func(w http.ResponseWriter, r *http.Request) bool {
