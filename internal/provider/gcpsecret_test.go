@@ -162,6 +162,52 @@ func TestGCPSecretStoreHappyPath(t *testing.T) {
 	}
 }
 
+// TestGCPSecretStoreSanitizesEmailIdentityNames pins the delivery contract for
+// real provisioned GCP identities: their names are service-account emails,
+// which are not valid Secret Manager secret ids, so the adapter derives a
+// deterministic sanitized id and still delivers under audit.
+func TestGCPSecretStoreSanitizesEmailIdentityNames(t *testing.T) {
+	fixed := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	identity := demoGCPIdentity("mutandae-demo-four-va-f55979e8@mutandae-demo.iam.gserviceaccount.com", fixed.Add(90*24*time.Hour))
+	wantID := "mutandae-demo-four-va-f55979e8-mutandae-demo-iam-gserviceaccount-com"
+	var sawID string
+	server, adapter := newGCPSecretTestServer(t, fixed, func(w http.ResponseWriter, r *http.Request, body []byte) {
+		sawID = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"name": "projects/" + fakeGCPProject + "/secrets/" + wantID + "/versions/1",
+		})
+	}, true)
+	defer server.Close()
+
+	ref, err := adapter.StoreSecret(context.Background(), identity, "key-1", "email-name-secret")
+	if err != nil {
+		t.Fatalf("StoreSecret() error = %v", err)
+	}
+	if !strings.Contains(sawID, "/secrets/"+wantID+":addVersion") {
+		t.Fatalf("secret id path = %q, want the sanitized id %q", sawID, wantID)
+	}
+	if ref.SecretName != wantID {
+		t.Fatalf("ref.SecretName = %q, want %q", ref.SecretName, wantID)
+	}
+}
+
+func TestGCPSanitizeSecretID(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"mutandae-demo-four-va-f55979e8@mutandae-demo.iam.gserviceaccount.com", "mutandae-demo-four-va-f55979e8-mutandae-demo-iam-gserviceaccount-com"},
+		{"mutandae-demo-plain", "mutandae-demo-plain"},
+		{"mutandae-demo--trailing--", "mutandae-demo--trailing"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := gcpSanitizeSecretID(tc.in); got != tc.want {
+			t.Errorf("gcpSanitizeSecretID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestGCPSecretStoreCreatesMissingSecretAndRetries(t *testing.T) {
 	fixed := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	identity := demoGCPIdentity("mutandae-demo-fallback", fixed.Add(24*time.Hour))

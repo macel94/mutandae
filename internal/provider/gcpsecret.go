@@ -183,10 +183,36 @@ func gcpVaultSecretName(identity protocol.MachineIdentity) (string, error) {
 	if !isDemoName(identity.Name) {
 		return "", fmt.Errorf("gcp: refusing vault access outside the %s* namespace", demoPrefix)
 	}
-	if !gcpVaultValueMatches(gcpSecretIDPattern, identity.Name) {
-		return "", errors.New("gcp: demo identity name is not a valid Secret Manager secret id")
+	// GCP identity names are service-account emails ("name@project.iam.
+	// gserviceaccount.com"), but Secret Manager secret ids only allow
+	// [a-zA-Z0-9_-]. Sanitize deterministically — the same identity always
+	// maps to the same secret, keeping rotations under one auditable secret —
+	// instead of refusing delivery for every real provisioned identity.
+	name := gcpSanitizeSecretID(identity.Name)
+	if name == "" {
+		return "", errors.New("gcp: demo identity name sanitizes to an empty Secret Manager secret id")
 	}
-	return identity.Name, nil
+	return name, nil
+}
+
+// gcpSanitizeSecretID maps a wire-provided name onto a Secret Manager secret
+// id: characters outside [A-Za-z0-9_-] become '-', leading and trailing '-'
+// are trimmed, and the result is capped at 255 characters.
+func gcpSanitizeSecretID(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	id := strings.Trim(b.String(), "-")
+	if len(id) > 255 {
+		id = id[:255]
+	}
+	return id
 }
 
 func (a *GCPAdapter) gcpSecretAddVersionPath(name string) string {
