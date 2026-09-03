@@ -8,6 +8,18 @@ import (
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
+// ProviderDescriptor names one wired provider adapter and the public tenant
+// scope it governs. Scope states the identifier explicitly — "tenant <id>"
+// for Azure/Entra ID, "account <id>" for AWS IAM, "project <id>" for GCP IAM
+// — so the UI can show which Azure tenant, AWS account, or GCP project the
+// demo is attached to. Identifiers of this kind are not credentials: they are
+// the opaque, non-secret names that tokens and ARNs already expose.
+type ProviderDescriptor struct {
+	Kind  string
+	Label string
+	Scope string
+}
+
 // Public is immutable after construction and contains no raw environment
 // values, connection strings, credentials, provider endpoints, or tenant IDs.
 type Public struct {
@@ -15,6 +27,10 @@ type Public struct {
 	Persistence string
 	Provider    string
 	Clock       func() time.Time
+	// Providers describes the wired adapters with their explicit tenant
+	// scopes; it may be empty, in which case the UI falls back to the
+	// feature-flag-derived summary without identifiers.
+	Providers []ProviderDescriptor
 	// Features advertises safe, non-secret capability flags to the UI. The
 	// composition root adds "provision:<kind>" for each real tenant that can
 	// create zero-permission identities.

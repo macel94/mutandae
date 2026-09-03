@@ -4,7 +4,9 @@ ARG BUILD_SHA=unknown
 WORKDIR /src
 COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/mutandae ./cmd/mutandae
+# The exact source revision is baked into the binary so the site can link the
+# GitHub commit that produced it (internal/buildinfo).
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/mutandae/mutandae/internal/buildinfo.Revision=${BUILD_SHA}" -o /out/mutandae ./cmd/mutandae
 
 FROM alpine:3.24
 ARG BUILD_SHA=unknown
