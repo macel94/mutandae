@@ -1,5 +1,14 @@
 {{ define "identity-table" }}
 <table class="identity-table">
+  <colgroup>
+    <col style="width:20%">
+    <col style="width:13.5%">
+    <col style="width:11%">
+    <col style="width:15%">
+    <col style="width:11.5%">
+    <col style="width:11%">
+    <col>
+  </colgroup>
   <thead>
     <tr>
       <th>Identity</th>
@@ -15,12 +24,12 @@
     {{ range .Identities }}
     <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}">
       <td>
-        <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span><strong>{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
+        <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span title="{{ .Name }}"><strong title="{{ .Name }}">{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
       </td>
       <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
       <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
       <td class="vault-cell">
-        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else if .CommonVaultVersion }}<span class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</span>{{ else }}<span class="vault-none">—</span>{{ end }}{{ if and .VaultVersion .CommonVaultVersion }}<small class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</small>{{ end }}
+        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span title="{{ .VaultLabel }} · {{ .VaultVersion }}"><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else if .CommonVaultVersion }}<span class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</span>{{ else }}<span class="vault-none">—</span>{{ end }}{{ if and .VaultVersion .CommonVaultVersion }}<small class="vault-cluster" title="{{ .CommonVaultLabel }} · {{ .CommonVaultVersion }}">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</small>{{ end }}
       </td>
       <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
       <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>

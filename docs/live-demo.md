@@ -113,19 +113,29 @@ The governor principals need these extra, namespace-scoped permissions:
   `secretsmanager:CreateSecret`, `secretsmanager:PutSecretValue`,
   `secretsmanager:GetSecretValue`, `secretsmanager:DescribeSecret`,
   `secretsmanager:TagResource`, `secretsmanager:DeleteSecret`.
-- **GCP** — the `mutandae-governor` service account gains a custom project
-  role `mutandaeDemoSecretManager` with `secretmanager.secrets.create`,
-  `secretmanager.secrets.get`, `secretmanager.versions.add`,
-  `secretmanager.versions.get`, `secretmanager.versions.access`,
-  `secretmanager.versions.list`, `secretmanager.versions.disable`, hardened
-  with an IAM condition `resource.name.startsWith("projects/_/secrets/mutandae-demo-")`
-  (Secret Manager API must be enabled in the project).
+  **Status: pending operator action** — apply with an admin session
+  (`aws login`) using the copy-paste policy below; until then AWS native
+  delivery surfaces an honest attention `credential.delivered` event while
+  the cluster μVault copy still works.
 - **Azure** — the `mutandae-eval` application gains the **Key Vault Secrets
   Officer** role on the demo vault referenced by `AZURE_KEY_VAULT_URL`
   (provisioned as `mutandae-demo-kv-7f3a` in `mutandae-demo-rg`, westus2,
   RBAC-authorized; the role is assigned to the service principal object id
   `f6dd3b2d-e7ac-4853-a7a9-e35216a3bc68`). Graph permissions do not grant
   vault access, so this role is the only new grant.
+  **Status: applied and verified** — live provisioning delivers to the
+  vault and `Use` retrieves from it under audit.
+- **GCP** — the `mutandae-governor` service account holds the custom project
+  role `mutandaeDemoSecretManager` with `secretmanager.secrets.create`,
+  `secretmanager.secrets.get`, `secretmanager.versions.add`,
+  `secretmanager.versions.get`, `secretmanager.versions.access`,
+  `secretmanager.versions.list`, `secretmanager.versions.disable`, hardened
+  with an IAM condition `resource.name.startsWith("projects/<project-number>/secrets/mutandae-demo-")`
+  (note: conditions use the project **number**, not the `_` placeholder, and
+  the Secret Manager API must be enabled in the project — both applied).
+  **Status: applied and verified.** GCP identity names are service-account
+  emails, so the adapter derives a deterministic Secret-Manager-safe secret
+  id from the identity name.
 - **Cluster μVault** — the control plane also mirrors every demo credential
   into the cluster-local HashiCorp Vault (KV v2, path prefix
   `mutandae/demo/<environment>/…`) using a token scoped to the

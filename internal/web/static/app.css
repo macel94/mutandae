@@ -105,13 +105,25 @@ kbd { position: absolute; right: 8px; padding: 1px 5px; border: 1px solid var(--
 .filter-group button:hover, .filter-group button.selected { background: var(--slate-wash); color: var(--ink); }
 .filter-group button.selected { box-shadow: inset 0 -2px 0 var(--cinnabar); }
 .table-wrap { overflow-x: auto; border-top: 1px solid var(--line); }
-.identity-table { width: 100%; border-collapse: collapse; text-align: left; }
+.identity-table { table-layout: fixed; width: 100%; border-collapse: collapse; text-align: left; }
 .identity-table th { padding: 12px 12px; color: var(--ink-faint); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
 .identity-table th:first-child, .identity-table td:first-child { padding-left: 26px; }
 .identity-table th:last-child, .identity-table td:last-child { padding-right: 26px; }
 .identity-table td { padding: 14px 12px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; vertical-align: middle; white-space: nowrap; }
 .identity-table tbody tr:hover { background: #fbfcfb; }
 .identity-name, .provider { display: flex; align-items: center; gap: 9px; }
+/* Fixed table layout gives every column a set share; long names — real
+   provisioned GCP identities are service-account emails — truncate inside
+   their cell instead of pushing the table sideways. */
+.identity-name > span, .vault-cell .provider > span { min-width: 0; }
+.identity-name strong, .identity-name small,
+.owner-cell strong, .owner-cell small,
+.vault-cell .provider strong, .vault-cell .provider small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .identity-name strong, .owner-cell strong, .expiry-cell strong { display: block; color: var(--ink); font-size: 12px; font-weight: 720; }
 .identity-name small, .owner-cell small, .expiry-cell small { display: block; margin-top: 2px; color: var(--ink-faint); font-size: 10px; }
 .identity-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--cinnabar-wash); color: var(--cinnabar); font-family: Georgia, serif; font-size: 14px; font-weight: 700; text-transform: uppercase; }
