@@ -71,7 +71,7 @@ jobs:
 
   publish:
     name: Publish immutable image
-    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'deploy: publish image') }}"
+    if: "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'deploy: publish image') }}"
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 25
