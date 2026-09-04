@@ -63,6 +63,8 @@ type Dependencies struct {
 	Integration   lifecycle.IntegrationService
 	Clock         Clock
 	Logger        Logger
+	Auth          AuthConfig
+	Metrics       MetricsConfig
 	RateLimit     RateLimitConfig
 	// DemoLimit caps the concurrently active demo identities per provider;
 	// zero falls back to 40.
@@ -75,6 +77,9 @@ type Server struct {
 	static        fs.FS
 	now           Clock
 	logger        Logger
+	structured    *structuredLogger
+	auth          *authenticator
+	metrics       *Metrics
 	configuration ConfigurationService
 	integration   lifecycle.IntegrationService
 	build         buildView
@@ -108,6 +113,12 @@ func newServer(deps Dependencies) (*Server, error) {
 	if deps.Logger == nil {
 		return nil, errors.New("logger is required")
 	}
+
+	auth, err := newAuthenticator(deps.Auth, deps.Clock)
+	if err != nil {
+		return nil, err
+	}
+	structured := newStructuredLogger(deps.Logger, deps.Clock)
 
 	templates, err := template.New("mutandae").Funcs(template.FuncMap{
 		"formatDate": func(value time.Time) string { return value.Format("Jan 02, 2006") },
@@ -154,7 +165,10 @@ func newServer(deps Dependencies) (*Server, error) {
 		templates:     templates,
 		static:        static,
 		now:           deps.Clock,
-		logger:        deps.Logger,
+		logger:        structured,
+		structured:    structured,
+		auth:          auth,
+		metrics:       newMetrics(deps.Clock),
 		rateLimit:     cfg,
 		demoLimit:     demoLimit,
 	}, nil
@@ -201,15 +215,32 @@ func (s *Server) routes() http.Handler {
 	// Health probes.
 	mux.HandleFunc("GET /livez", s.health)
 	mux.HandleFunc("GET /readyz", s.health)
+	mux.HandleFunc("GET /metrics", s.metrics.serveHTTP)
+	if s.auth.mode == AuthModeOIDC {
+		mux.HandleFunc("GET /auth/login", s.authLogin)
+		mux.HandleFunc("GET /auth/callback", s.authCallback)
+		mux.HandleFunc("POST /auth/logout", s.authLogout)
+	}
 	// Favicon: browsers request /favicon.ico even without an HTML link.
 	mux.HandleFunc("GET /favicon.ico", s.faviconICO)
 	mux.HandleFunc("GET /favicon.svg", s.faviconSVG)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.static))))
-	return securityHeaders(throttle(s.readLimiter, s.writeLimiter, s.createLimiter, mux))
+	base := throttle(s.readLimiter, s.writeLimiter, s.createLimiter, mux)
+	if s.auth.mode != AuthModeNone {
+		base = s.auth.ServeHTTP(base)
+	}
+	base = securityHeaders(base)
+	base = recoveryMiddleware(s.structured, base)
+	base = metricsMiddleware(s.metrics, s.now, base)
+	base = requestLogMiddleware(s.structured, s.now, base)
+	// Request IDs wrap the complete stack, including authentication failures,
+	// so every response and every request log has the same correlation value.
+	base = requestIDMiddleware(base)
+	return base
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "index", s.dashboardView())
+	s.render(w, "index", s.dashboardViewForRequest(r))
 }
 
 func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
@@ -219,18 +250,24 @@ func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
 		view.IntegrationEnabled = true
 		view.Requirements = s.integration.Requirements()
 	}
+	// The CSRF cookie is also used by the signed-in logout form. Ensure it
+	// exists before building chrome so the hidden form field has its value.
+	csrfToken := ensureCSRFCookie(w, r)
 	// Shared chrome comes from the same builder the dashboard uses, so the
 	// head, topbar, footer, and environment chip are byte-identical on every
 	// page and can never drift out of sync again.
-	view.Chrome = s.chrome("configuration",
+	view.AuthMetadata = s.authMetadata()
+	view.Chrome = s.chromeForRequest(r, "configuration",
 		"Mutandae · Configuration",
 		"Mutandae demo: create and govern zero-permission machine identities in real Azure, AWS, and GCP tenants")
-	ensureCSRFCookie(w, r)
+	if view.Chrome.CSRFToken == "" {
+		view.Chrome.CSRFToken = csrfToken
+	}
 	s.render(w, "configuration", view)
 }
 
 func (s *Server) identityList(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "identity-list", s.dashboardView())
+	s.render(w, "identity-list", s.dashboardViewForRequest(r))
 }
 
 func (s *Server) identityEvents(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +319,7 @@ func (s *Server) deleteIdentity(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "delete-result", deleteResultView{
 		Identity:  toIdentityView(resp.Identity, s.now()),
 		Events:    resp.Events,
-		Dashboard: s.dashboardView(),
+		Dashboard: s.dashboardViewForRequest(r),
 	})
 }
 
@@ -355,7 +392,7 @@ func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
 			Secret:    resp.OneTimeSecret,
 			Vault:     resp.Vault,
 			VaultName: vaultReferenceName(resp.Vault, resp.Identity.Provider.Provider),
-			Dashboard: s.dashboardView(),
+			Dashboard: s.dashboardViewForRequest(r),
 		})
 		return
 	}
@@ -366,7 +403,7 @@ func (s *Server) provision(w http.ResponseWriter, r *http.Request) {
 		Vault:        resp.Vault,
 		VaultName:    vaultReferenceName(resp.Vault, resp.Identity.Provider.Provider),
 		Instructions: resp.Instructions,
-		Dashboard:    s.dashboardView(),
+		Dashboard:    s.dashboardViewForRequest(r),
 	})
 }
 
@@ -421,9 +458,18 @@ func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiConfiguration(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, http.StatusOK, protocol.ConfigurationResponse{
-		APIVersion:    protocol.Version,
-		Configuration: s.configuration.Configuration(),
+	metadata := s.authMetadata()
+	s.writeJSON(w, http.StatusOK, safeConfigurationResponse{
+		APIVersion: protocol.Version,
+		Configuration: safeConfiguration{
+			Configuration:    s.configuration.Configuration(),
+			AuthMode:         metadata.AuthMode,
+			Roles:            append([]string(nil), metadata.Roles...),
+			TokensConfigured: metadata.TokensConfigured,
+		},
+		AuthMode:         metadata.AuthMode,
+		Roles:            append([]string(nil), metadata.Roles...),
+		TokensConfigured: metadata.TokensConfigured,
 	})
 }
 
@@ -860,6 +906,12 @@ func csrfCookie(r *http.Request) string {
 }
 
 func validateCSRF(r *http.Request, requireHeader bool) error {
+	// Bearer tokens are explicit API credentials and are not exposed to
+	// cross-site cookie requests, so they intentionally bypass the browser
+	// CSRF protocol used by session cookies.
+	if bearerAuthenticated(r) {
+		return nil
+	}
 	cookie := csrfCookie(r)
 	if cookie == "" {
 		return lifecycle.ErrIntegrationCSRF
@@ -1002,6 +1054,13 @@ type chromeData struct {
 	Providers    []providerSummary
 	ClusterVault bool
 	Build        buildView
+	// Authenticated is deliberately false in auth=none mode, preserving the
+	// original public-demo navigation. Principal and Role are safe identity
+	// display values, never credentials or token digests.
+	Authenticated bool
+	Principal     string
+	Role          string
+	CSRFToken     string
 }
 
 // chrome builds the shared page furniture for one full page. The provider
@@ -1027,6 +1086,38 @@ func (s *Server) chrome(active, title, description string) chromeData {
 // the inventory has not met yet. Explicit provider descriptors are
 // authoritative for labels and public tenant scopes; without them the
 // feature-flag fallback names the provisionable providers.
+func (s *Server) chromeForRequest(r *http.Request, active, title, description string) chromeData {
+	chrome := s.chrome(active, title, description)
+	if r == nil {
+		return chrome
+	}
+	chrome.CSRFToken = csrfCookie(r)
+	if identity, ok := IdentityFromContext(r.Context()); ok {
+		chrome.Authenticated = true
+		chrome.Principal = identity.Principal
+		chrome.Role = identity.Role
+	}
+	return chrome
+}
+
+func (s *Server) dashboardViewForRequest(r *http.Request) dashboardView {
+	view := s.dashboardView()
+	view.Chrome = s.chromeForRequest(r, "overview",
+		"Mutandae · Machine identity control plane",
+		"Mutandae machine identity lifecycle control plane demo")
+	view.LiveReal = view.Chrome.LiveReal
+	return view
+}
+
+func (s *Server) authMetadata() AuthMetadata {
+	if s == nil || s.auth == nil {
+		return AuthMetadata{AuthMode: AuthModeNone, Roles: allRoles()}
+	}
+	metadata := s.auth.metadata()
+	metadata.Roles = append([]string(nil), metadata.Roles...)
+	return metadata
+}
+
 func (s *Server) providerSummaries(identities []protocol.MachineIdentity, now time.Time) []providerSummary {
 	seen := make(map[string]providerSummary)
 	descriptorByKind := make(map[string]*config.ProviderDescriptor)
@@ -1193,7 +1284,23 @@ type configurationPageView struct {
 	IntegrationEnabled bool
 	Requirements       protocol.AzureIntegrationRequirements
 	Provision          []providerSummary
+	AuthMetadata       AuthMetadata
 	Chrome             chromeData
+}
+
+type safeConfiguration struct {
+	protocol.Configuration
+	AuthMode         string   `json:"auth_mode"`
+	Roles            []string `json:"roles"`
+	TokensConfigured bool     `json:"tokens_configured"`
+}
+
+type safeConfigurationResponse struct {
+	APIVersion       string            `json:"api_version"`
+	Configuration    safeConfiguration `json:"configuration"`
+	AuthMode         string            `json:"auth_mode"`
+	Roles            []string          `json:"roles"`
+	TokensConfigured bool              `json:"tokens_configured"`
 }
 
 // buildView is the public, non-secret description of the source revision that

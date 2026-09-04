@@ -3,10 +3,32 @@
 package config
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
+
+// ValidateAuthMode validates the deployment authentication mode and enforces
+// the live-environment fail-closed rule. The web package owns the protocol
+// implementation; keeping this policy here lets the composition root validate
+// it before wiring providers or starting an HTTP server.
+func ValidateAuthMode(environment, mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "none"
+	}
+	switch mode {
+	case "none", "oidc", "token":
+	default:
+		return fmt.Errorf("MUTANDAE_AUTH_MODE must be none, oidc, or token (got %q)", mode)
+	}
+	if strings.EqualFold(strings.TrimSpace(environment), "live") && mode == "none" {
+		return fmt.Errorf("MUTANDAE_AUTH_MODE=none is not allowed in the live environment")
+	}
+	return nil
+}
 
 // ProviderDescriptor names one wired provider adapter and the public tenant
 // scope it governs. Scope states the identifier explicitly — "tenant <id>"
@@ -26,7 +48,12 @@ type Public struct {
 	Environment string
 	Persistence string
 	Provider    string
-	Clock       func() time.Time
+	// AuthMode, AuthRoles, and TokensConfigured are safe operational metadata;
+	// they never contain issuer secrets, token values, token digests, or keys.
+	AuthMode         string
+	AuthRoles        []string
+	TokensConfigured bool
+	Clock            func() time.Time
 	// Providers describes the wired adapters with their explicit tenant
 	// scopes; it may be empty, in which case the UI falls back to the
 	// feature-flag-derived summary without identifiers.

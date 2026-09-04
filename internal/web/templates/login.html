@@ -1,0 +1,21 @@
+{{ define "login" }}
+<!doctype html>
+<html lang="en">
+<head>{{ template "page-head" .Chrome }}</head>
+<body>
+  <div class="app-shell">
+    {{ template "topbar" .Chrome }}
+    <main class="configuration-page" aria-labelledby="login-title">
+      <section class="panel config-card">
+        <p class="hero-standfirst">Mutandae access <span class="eyebrow-line"></span></p>
+        <h1 id="login-title">Sign in to continue.</h1>
+        <p class="muted">Use your organization’s identity provider to access the machine-identity control plane.</p>
+        {{ if .Error }}<p class="config-warning" role="alert">{{ .Error }}</p>{{ end }}
+        <a class="button button-primary" href="{{ .LoginURL }}">Continue with SSO</a>
+      </section>
+    </main>
+    {{ template "page-footer" .Chrome }}
+  </div>
+</body>
+</html>
+{{ end }}
