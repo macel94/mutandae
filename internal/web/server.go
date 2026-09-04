@@ -216,6 +216,10 @@ func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
 		view.IntegrationEnabled = true
 		view.Requirements = s.integration.Requirements()
 	}
+	// Shared chrome comes from the same builder the dashboard uses, so the
+	// topbar, footer, and environment chip are byte-identical on every page
+	// and can never drift out of sync again.
+	view.Chrome = s.chrome("configuration")
 	ensureCSRFCookie(w, r)
 	s.render(w, "configuration", view)
 }
@@ -928,6 +932,88 @@ func operatorOrDefault(r *http.Request) string {
 	return "demo-operator"
 }
 
+// chromeData is the shared page furniture rendered by the topbar, footer, and
+// audit-modal partials. Both full-page views carry it in a Chrome field, so
+// the header, tabs, environment chip, and footer come from one template fed
+// by one builder and cannot drift between pages.
+type chromeData struct {
+	// Active names the nav item to highlight: "overview" or "configuration".
+	Active       string
+	LiveReal     bool
+	Providers    []providerSummary
+	ClusterVault bool
+	Build        buildView
+}
+
+// chrome builds the shared page furniture for one full page. The provider
+// derivation lives here so the dashboard and the configuration page render
+// byte-identical chrome from a single source.
+func (s *Server) chrome(active string) chromeData {
+	now := s.now()
+	identities := s.lifecycle.List()
+	providers := s.providerSummaries(identities, now)
+	return chromeData{
+		Active:       active,
+		LiveReal:     len(s.provisionableProviders()) > 0,
+		Providers:    providers,
+		ClusterVault: s.clusterVaultEnabled(),
+		Build:        s.build,
+	}
+}
+
+// providerSummaries derives the footer's provider adapters: every provider
+// seen in the inventory (ordered canonically), then the wired real adapters
+// the inventory has not met yet. Explicit provider descriptors are
+// authoritative for labels and public tenant scopes; without them the
+// feature-flag fallback names the provisionable providers.
+func (s *Server) providerSummaries(identities []protocol.MachineIdentity, now time.Time) []providerSummary {
+	seen := make(map[string]providerSummary)
+	descriptorByKind := make(map[string]*config.ProviderDescriptor)
+	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
+		for i, descriptor := range descriptors {
+			descriptorByKind[descriptor.Kind] = &descriptors[i]
+		}
+	}
+	for _, identity := range identities {
+		kind := identity.Provider.Provider
+		if _, ok := seen[kind]; ok || kind == "" {
+			continue
+		}
+		seen[kind] = providerSummary{Kind: kind, Label: providerLabel(kind), Mark: providerMark(kind), Scope: providerScope(identity)}
+	}
+	var providers []providerSummary
+	for _, kind := range []string{"azure-entra", "aws-iam", "gcp-iam"} {
+		summary, ok := seen[kind]
+		if !ok {
+			continue
+		}
+		if descriptor := descriptorByKind[kind]; descriptor != nil {
+			summary.Label = descriptor.Label
+			summary.Scope = descriptor.Scope
+		}
+		providers = append(providers, summary)
+	}
+	// Advertise wired real adapters even before the first identity exists so
+	// the footer always reflects what the demo is attached to.
+	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
+		for _, descriptor := range descriptors {
+			if _, ok := seen[descriptor.Kind]; ok {
+				continue
+			}
+			providers = append(providers, providerSummary{
+				Kind: descriptor.Kind, Label: descriptor.Label, Mark: providerMark(descriptor.Kind), Scope: descriptor.Scope,
+			})
+		}
+	} else {
+		for _, candidate := range s.provisionableProviders() {
+			if _, ok := seen[candidate.Kind]; !ok {
+				providers = append(providers, candidate)
+			}
+		}
+	}
+	return providers
+}
+
 func (s *Server) dashboardView() dashboardView {
 	now := s.now()
 	identities := s.lifecycle.List()
@@ -937,21 +1023,10 @@ func (s *Server) dashboardView() dashboardView {
 		Build:        s.build,
 		ClusterVault: s.clusterVaultEnabled(),
 	}
-	providers := make(map[string]providerSummary)
-	descriptorByKind := make(map[string]*config.ProviderDescriptor)
-	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
-		for i, descriptor := range descriptors {
-			descriptorByKind[descriptor.Kind] = &descriptors[i]
-		}
-	}
 	for _, identity := range identities {
 		item := toIdentityView(identity, now)
 		view.Identities = append(view.Identities, item)
 		view.Total++
-		kind := identity.Provider.Provider
-		if _, seen := providers[kind]; !seen && kind != "" {
-			providers[kind] = providerSummary{Kind: kind, Label: providerLabel(kind), Mark: providerMark(kind), Scope: providerScope(identity)}
-		}
 		switch item.Urgency {
 		case string(protocol.UrgencyHealthy):
 			if item.RenewalHealth == string(protocol.HealthHealthy) {
@@ -964,41 +1039,16 @@ func (s *Server) dashboardView() dashboardView {
 			view.Attention++
 		}
 	}
-	for _, kind := range []string{"azure-entra", "aws-iam", "gcp-iam"} {
-		if summary, ok := providers[kind]; ok {
-			// Explicit provider descriptors are authoritative for the wired
-			// scope: identities created before the descriptors existed (or by
-			// the simulator seed) may not carry the tenant identifier.
-			if descriptor := descriptorByKind[kind]; descriptor != nil {
-				summary.Label = descriptor.Label
-				summary.Scope = descriptor.Scope
-			}
-			view.Providers = append(view.Providers, summary)
-		}
-	}
 	view.Provision = s.provisionableProviders()
-	// Advertise wired real adapters even before the first identity exists so
-	// the footer always reflects what the demo is attached to. Explicit
-	// provider descriptors (labels + public tenant scopes) win when the
-	// configuration advertises them; otherwise fall back to the
-	// feature-flag-derived summaries without identifiers.
-	if descriptors := s.wiredProviderDescriptors(); len(descriptors) > 0 {
-		for _, descriptor := range descriptors {
-			if _, ok := providers[descriptor.Kind]; ok {
-				continue
-			}
-			view.Providers = append(view.Providers, providerSummary{
-				Kind: descriptor.Kind, Label: descriptor.Label, Mark: providerMark(descriptor.Kind), Scope: descriptor.Scope,
-			})
-		}
-	} else {
-		for _, candidate := range view.Provision {
-			if _, ok := providers[candidate.Kind]; !ok {
-				view.Providers = append(view.Providers, candidate)
-			}
-		}
-	}
 	view.LiveReal = len(view.Provision) > 0
+	view.Providers = s.providerSummaries(identities, now)
+	view.Chrome = chromeData{
+		Active:       "overview",
+		LiveReal:     view.LiveReal,
+		Providers:    view.Providers,
+		ClusterVault: view.ClusterVault,
+		Build:        s.build,
+	}
 	return view
 }
 
@@ -1082,6 +1132,7 @@ type configurationPageView struct {
 	Requirements       protocol.AzureIntegrationRequirements
 	Provision          []providerSummary
 	Build              buildView
+	Chrome             chromeData
 }
 
 // buildView is the public, non-secret description of the source revision that
@@ -1156,6 +1207,7 @@ type dashboardView struct {
 	UpdatedAt    string
 	Build        buildView
 	ClusterVault bool
+	Chrome       chromeData
 }
 
 // providerSummary is a single provider adapter rendered in the dashboard.

@@ -4,22 +4,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Mutandae demo: simulated Azure, AWS and GCP adapters, plus optional Azure integration">
+  <meta name="description" content="Mutandae demo: create and govern zero-permission machine identities in real Azure, AWS, and GCP tenants">
   <title>Mutandae · Configuration</title>
   <link rel="icon" href="/favicon.ico" sizes="any" type="image/x-icon">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="Mutandae home"><span class="brand-symbol">μ</span><span>Mutandae</span></a>
-      <nav class="topnav is-open">
-        <a href="/">Overview</a>
-        <a class="active" href="/configuration">Configuration</a>
-        <span class="environment-chip"><span class="status-dot"></span>{{ .Environment }}</span>
-      </nav>
-    </header>
+    {{ template "topbar" .Chrome }}
     <main class="configuration-page" id="configuration-app">
       <section class="hero configuration-hero">
         <div class="hero-copy">
@@ -112,10 +107,11 @@
         <a class="button button-secondary" href="/">Open demo dashboard</a>
       </section>
     </main>
-    <footer class="footer"><span>μTandae Protocol v1 · multi-cloud lifecycle demo</span><span>Safe runtime configuration · updated {{ .UpdatedAt.Format "Jan 02, 2006 · 15:04 MST" }}</span>{{ if .Build.URL }}<a class="footer-build" href="{{ .Build.URL }}" title="GitHub commit that built this site">Built from {{ .Build.Short }} ↗{{ if .Build.Dirty }} · modified{{ end }}</a>{{ end }}</footer>
+    {{ template "page-footer" .Chrome }}
   </div>
 <script src="/static/integration.js" defer></script>
 <!-- The integration script is an external static asset so the CSP does not allow inline JavaScript. -->
+  {{ template "audit-modal" . }}
 </body>
 </html>
 {{ end }}

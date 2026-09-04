@@ -55,7 +55,7 @@ func TestDashboardRendersAuditModalMarkup(t *testing.T) {
 
 func TestDashboardNavLinksToProtocolSection(t *testing.T) {
 	body := dashboardBody(t, testHandler(t), "/")
-	if !strings.Contains(body, `<a href="#protocol">Protocol</a>`) {
+	if !strings.Contains(body, `<a href="/#protocol">Protocol</a>`) {
 		t.Error("topnav does not link the #protocol section")
 	}
 	if !strings.Contains(body, `<section class="protocol-explainer panel" id="protocol" aria-labelledby="protocol-title">`) {
@@ -459,4 +459,95 @@ func TestFlowDiagramPaintsBoxesBeforeText(t *testing.T) {
 			t.Errorf("flow diagram %q lost its stage labels", variant)
 		}
 	}
+}
+
+// TestSharedChromeIsIdenticalAcrossPages locks the shared page furniture: the
+// topbar (brand, tabs, environment chip), footer, and audit modal must come
+// from one partial fed by one builder, so the pages cannot drift apart again.
+// The only intended difference is the highlighted tab.
+func TestSharedChromeIsIdenticalAcrossPages(t *testing.T) {
+	handler := testHandler(t)
+	dashboard := chromeBands(t, dashboardBody(t, handler, "/"))
+	configuration := chromeBands(t, dashboardBody(t, handler, "/configuration"))
+
+	// The topbars differ only in which tab is highlighted: strip the active
+	// marker and the remaining chrome must be byte-identical.
+	strip := func(topbar string) string {
+		return strings.ReplaceAll(topbar, ` class="active"`, "")
+	}
+	if strip(dashboard.topbar) != strip(configuration.topbar) {
+		t.Errorf("topbars diverge beyond the active tab:\n dashboard:    %q\n configuration: %q", dashboard.topbar, configuration.topbar)
+	}
+	if !strings.Contains(dashboard.topbar, `class="active" href="/#overview">Overview`) {
+		t.Error("dashboard must highlight the Overview tab")
+	}
+	if !strings.Contains(configuration.topbar, `class="active" href="/configuration">Configuration`) {
+		t.Error("configuration page must highlight the Configuration tab")
+	}
+	if strings.Count(dashboard.topbar, `class="active"`) != 1 || strings.Count(configuration.topbar, `class="active"`) != 1 {
+		t.Error("exactly one tab must be active per page")
+	}
+
+	// Same tabs, same order, on both pages.
+	for _, tab := range []string{"/#overview", "/#inventory", "/#protocol", "/configuration"} {
+		if strings.Count(dashboard.topbar, tab) != 1 || strings.Count(configuration.topbar, tab) != 1 {
+			t.Errorf("tab %q missing or duplicated in the shared topbar", tab)
+		}
+	}
+
+	// The environment chip text must be computed once and rendered identically.
+	if dashboard.chip == "" || dashboard.chip != configuration.chip {
+		t.Errorf("environment chip diverges: %q vs %q", dashboard.chip, configuration.chip)
+	}
+
+	// Footers are byte-identical: same provider adapters, vault, and (when a
+	// revision is stamped in) build link. TestFooterBuildLinkReflectsRevision
+	// pins the build link for both paths; unit tests here have no revision.
+	if dashboard.footer != configuration.footer {
+		t.Errorf("footers diverge:\n dashboard:    %q\n configuration: %q", dashboard.footer, configuration.footer)
+	}
+
+	// Both pages load the same behaviour scripts; the configuration page
+	// previously shipped without htmx or app.js entirely.
+	for _, script := range []string{`src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"`, `src="/static/app.js"`} {
+		if !strings.Contains(configuration.head, script) {
+			t.Errorf("configuration page missing script %s", script)
+		}
+	}
+}
+
+// chromeBands slices the shared chrome out of a rendered page.
+func chromeBands(t *testing.T, body string) struct {
+	topbar string
+	chip   string
+	footer string
+	head   string
+} {
+	t.Helper()
+	topbarStart := strings.Index(body, `<header class="topbar">`)
+	topbarEnd := strings.Index(body[topbarStart:], "</header>")
+	if topbarStart < 0 || topbarEnd < 0 {
+		t.Fatal("page missing the shared topbar")
+	}
+	topbar := body[topbarStart : topbarStart+topbarEnd]
+	chipStart := strings.Index(topbar, `<span class="environment-chip">`)
+	if chipStart < 0 {
+		t.Fatal("topbar missing the environment chip")
+	}
+	chip := topbar[chipStart:]
+	footerStart := strings.Index(body, `<footer class="footer">`)
+	footerEnd := strings.Index(body[footerStart:], "</footer>")
+	if footerStart < 0 || footerEnd < 0 {
+		t.Fatal("page missing the shared footer")
+	}
+	headEnd := strings.Index(body, "</head>")
+	if headEnd < 0 {
+		t.Fatal("page missing head")
+	}
+	return struct {
+		topbar string
+		chip   string
+		footer string
+		head   string
+	}{topbar, chip, body[footerStart : footerStart+footerEnd], body[:headEnd]}
 }

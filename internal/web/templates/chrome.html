@@ -1,0 +1,34 @@
+{{ define "topbar" }}{{ with . }}<header class="topbar">
+      <a class="brand" href="/" aria-label="Mutandae home">
+        <span class="brand-symbol">μ</span><span>Mutandae</span>
+      </a>
+      <button class="menu-button" type="button" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+      <nav class="topnav" id="topnav">
+        <a{{ if eq .Active "overview" }} class="active"{{ end }} href="/#overview">Overview</a>
+        <a href="/#inventory">Identities</a>
+        <a href="/#protocol">Protocol</a>
+        <a{{ if eq .Active "configuration" }} class="active"{{ end }} href="/configuration">Configuration</a>
+        <span class="environment-chip"><span class="status-dot"></span>{{ if .LiveReal }}Live demo · real tenants{{ else }}Multi-cloud simulator{{ end }}</span>
+      </nav>
+    </header>{{ end }}{{ end }}
+
+{{ define "page-footer" }}{{ with . }}<footer class="footer">
+      <span>μTandae Protocol v1 · open-core lifecycle demo</span>
+      <span class="footer-providers">
+        {{ range .Providers }}<span class="footer-provider">Provider adapter: <strong>{{ .Label }}</strong> · {{ .Scope }}</span>{{ end }}
+      </span>
+      {{ if .ClusterVault }}<span class="footer-vault">Cluster vault: μVault (KV v2) · demo credentials persist in the cluster</span>{{ end }}
+      {{ if .Build.URL }}<a class="footer-build" href="{{ .Build.URL }}" title="GitHub commit that built this site">Built from {{ .Build.Short }} ↗{{ if .Build.Dirty }} · modified{{ end }}</a>{{ end }}
+    </footer>{{ end }}{{ end }}
+
+{{ define "audit-modal" }}
+  <div class="modal-backdrop" id="audit-modal" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="audit-modal-title">
+      <header class="modal-header">
+        <p class="modal-heading">Audit trail</p>
+        <button class="modal-close" type="button" aria-label="Close audit trail">×</button>
+      </header>
+      <div class="modal-body" id="audit-modal-content"></div>
+    </div>
+  </div>
+{{ end }}

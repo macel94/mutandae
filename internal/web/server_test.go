@@ -123,7 +123,11 @@ func TestConfigurationPageAndProtocolEndpointAreSafe(t *testing.T) {
 			t.Fatalf("%s status = %d, want 200", path, recorder.Code)
 		}
 		body := recorder.Body.String()
-		if strings.Contains(body, "redis://") || strings.Contains(body, "REDIS_URL") || strings.Contains(body, "tenant-1") || strings.Contains(body, "client_secret") {
+		// The shared chrome names the wired adapters and their public tenant
+		// scopes on every page (the dashboard always has), so synthetic
+		// provider identifiers are expected here. What must never appear is
+		// runtime connection data or credential material.
+		if strings.Contains(body, "redis://") || strings.Contains(body, "REDIS_URL") || strings.Contains(body, "client_secret") || strings.Contains(body, "customer-secret") {
 			t.Fatalf("%s exposed forbidden runtime data: %s", path, body)
 		}
 	}
@@ -211,7 +215,7 @@ func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 		"aria-label=\"Close audit trail\"",
 		"id=\"audit-modal-content\"",
 		"id=\"protocol\"",
-		"href=\"#protocol\"",
+		"href=\"/#protocol\"",
 		"What is the μTandae Protocol?",
 		"src=\"/static/app.js\"",
 	} {
