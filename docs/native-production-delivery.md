@@ -1,17 +1,17 @@
 # Native production delivery record
 
 This document records the delivery of Mutandae to the native `belacca-native` K3s
-cluster. It is intentionally detailed: the deployment crossed a private source
-repository, a public GHCR runtime image, Flux, cert-manager, Cloudflare DNS,
-Traefik, and Kyverno admission. The final result is working, but several
-interfaces had to be made compatible.
+cluster. It is intentionally detailed: the deployment crossed the published source
+repository, a public GHCR runtime image, a separate private GitOps source,
+Flux, cert-manager, Cloudflare DNS, Traefik, and Kyverno admission. The final
+result is working, but several interfaces had to be made compatible.
 
 ## Final result
 
-- Source repository: private `macel94/mutandae`.
+- Source repository: public `macel94/mutandae`.
 - Runtime image: public `ghcr.io/macel94/mutandae`.
 - Cluster: `belacca-native`, three K3s nodes.
-- Flux source: `flux-system/mutandae`, private SSH GitRepository.
+- Flux source: `flux-system/mutandae`, a private SSH GitRepository for cluster-side GitOps configuration.
 - Flux application: `flux-system/mutandae`, path `./deploy/k3s`.
 - Runtime namespace: `mutandae`.
 - Public hosts:
@@ -33,31 +33,32 @@ interfaces had to be made compatible.
 
 ## Problems solved
 
-### 1. Private source access had to be separate from runtime image access
+### 1. Cluster GitOps access is separate from runtime image access
 
-The source repository is private, while the cluster should pull the runtime
-image without a registry Secret. The solution was deliberately split:
+The application source and runtime image are public, while the cluster-side
+GitOps repository remains private and the cluster should pull the runtime image
+without a registry Secret. The solution is deliberately split:
 
-- a read-only GitHub deploy key for Flux source access;
+- a read-only GitHub deploy key for Flux access to the private GitOps source;
 - an encrypted SOPS Secret in `belacca-gitops` for the SSH key, public key, and
   GitHub `known_hosts` entry;
 - a public GHCR runtime package for anonymous cluster pulls;
 - no source credentials, registry credentials, Cloudflare token, or age private
   key in this repository.
 
-The GitHub deploy key is a source-access credential only. It does not grant the
-cluster access to GitHub Actions or package publishing.
+The GitHub deploy key is a GitOps source-access credential only. It does not
+grant the cluster access to GitHub Actions or package publishing.
 
-### 2. GitHub Artifact Attestation was not available for this source repository
+### 2. Keyless attestations were used for this delivery
 
 The existing `belacca.com` and `pong` workflows use GitHub's native Artifact
 Attestation actions. Their Kyverno rules use the corresponding
 `type: SigstoreBundle` verifier and work correctly.
 
-Mutandae could not use that storage path because GitHub does not provide
-Artifact Attestation storage for this user-owned private repository in the
-required way. Mutandae therefore uses keyless Cosign/Sigstore attestations,
-with GitHub OIDC and Rekor:
+This delivery instead uses keyless Cosign/Sigstore attestations with GitHub
+OIDC and Rekor. That choice reflects the original cluster and repository
+configuration; it is not a statement that the published source must remain
+private:
 
 - SLSA provenance;
 - CycloneDX SBOM;

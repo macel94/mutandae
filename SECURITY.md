@@ -16,7 +16,7 @@ snapshots. Pin a reviewed commit when deploying the project.
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately through a
-[GitHub Security Advisory](https://github.com/mutandae/mutandae/security/advisories/new),
+[GitHub Security Advisory](https://github.com/macel94/mutandae/security/advisories/new),
 not in a public issue, pull request, discussion, or chat message. Include:
 
 - the affected commit, release, or deployment;

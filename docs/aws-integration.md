@@ -2,15 +2,17 @@
 
 Mutandae models the AWS IAM boundary with two representations:
 
-1. A synthetic **AWS IAM simulator** whose inventory feeds the multi-cloud
-   governance demo.
-2. A **real-world integration** contract describing exactly what a caller must
-   supply to evaluate a real AWS IAM integration with Mutandae.
+1. A credential-less **AWS IAM simulator** whose inventory is the default for
+   local development and deterministic tests.
+2. A shipped **real AWS IAM adapter** plus an integration contract describing
+   exactly what a caller must supply to evaluate it against a real account.
 
-This document intentionally does not ship a live AWS client. Like the Azure
-reflection, the AWS story here is honest about trust boundaries: the operator
-and their IAM policy authorize each mutation; Mutandae never holds AWS secrets
-and cannot read an access key's secret value back from AWS after it is created.
+The standard-library real client is implemented in `internal/provider/aws.go`
+and uses the IAM Query API with SigV4 signing. The composition root selects it
+when the AWS credential environment is present; otherwise it uses the
+simulator. The trust boundary remains explicit: the operator and IAM policy
+authorize each mutation, and Mutandae cannot read an access key's secret value
+back from AWS after it is created.
 
 ## The simulated AWS IAM adapter
 
@@ -112,9 +114,9 @@ placed into snapshots, events, logs, or HTML templates.
 
 ### What is honest and what is not
 
-This section is a contract, not an implementation. The simulator models
-lifecycle and audit outcomes honestly without containing production AWS
-credentials or pretending to be a real AWS SDK client. Evaluating a real
-integration requires the operator-supplied credentials above and a review of
-their IAM policy before any production workload is touched, exactly as the
-Azure integration page requires for Entra.
+The simulator subsection models lifecycle and audit outcomes honestly without
+containing production AWS credentials. The shipped real adapter uses the Go
+standard library rather than an AWS SDK. Evaluating it requires the
+operator-supplied credentials above and a review of their IAM policy before any
+production workload is touched, exactly as the Azure integration page requires
+for Entra.

@@ -8,9 +8,10 @@ inventory a reviewer must contribute for the evaluator to run the tests without
 further back-and-forth.
 
 The public demo ships a dependency-light composition (Go standard library only —
-no cloud SDKs) plus one opt-in real client. Where real provider calls live, that
-is stated explicitly below at the **adapter boundary**. Everything else is
-provider-neutral protocol and an evaluator-provided test harness.
+no cloud SDKs) plus opt-in real clients for Azure/Entra, AWS IAM, and GCP IAM.
+Where real provider calls live, that is stated explicitly below at the **adapter
+boundary**. Everything else is provider-neutral protocol and an evaluator-
+provided test harness.
 
 ---
 
@@ -196,8 +197,9 @@ values must never be echoed or committed.
 | --- | --- |
 | `PORT` | HTTP port for the server under test (default `8080`) |
 | `MUTANDAE_ENVIRONMENT` | label, e.g. `preview`, `ci-eval` |
+| `MUTANDAE_EVAL_PREFIX` | non-secret mutation allow-list prefix; defaults to `mutandae-eval` |
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` | Entra tenant + client GUIDs |
-| `AZURE_KV_URL`, `AZURE_KV_SECRET_PREFIX` | optional vault URL + prefix |
+| `AZURE_KEY_VAULT_URL`, `AZURE_KEY_VAULT_PREFIX` | optional vault URL + prefix |
 | `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` | AWS context + key id |
 | `GCP_PROJECT_ID`, `GCP_REGION` | GCP project + region |
 
@@ -229,11 +231,12 @@ curl -si -X POST :8080/api/v1/identities/<id>/retire -d '{"confirm":true}'
 curl -s :8080/configuration | grep -q 'μTandae'             # dashboard renders
 ```
 
-Exactly where the real adapter is wired is the **composition root**
-(`cmd/mutandae/main.go`): today it wires the `azure-entra` simulator plus the
-interactive integration session. For the evaluation, the same root composes real
-`azure-entra`, `aws-iam`, and `gcp-iam` adapters behind `MultiProvider`. The
-evaluator documents that wiring in the harness; no other component changes.
+Exactly where the adapters are wired is the **composition root**
+(`cmd/mutandae/main.go`). It composes real `azure-entra`, `aws-iam`, and
+`gcp-iam` adapters automatically when the corresponding credential environment
+variables are present, and uses the simulators otherwise. The evaluation
+harness builds the same provider-neutral graph behind `MultiProvider`; no cloud
+mechanics belong in the protocol or web packages.
 
 ---
 
@@ -257,8 +260,10 @@ Run once per cloud; all must pass.
       deleted; GCP key deleted; Entra password revoked).
 - [ ] **Retire can restore/hide** — the retired identity disappears from the
       active list (`list` hides or marks `retired`) without deleting the audit
-      trail. (Adapters skip zero-credential identities on the next `Discover`,
-      but the harness does not yet assert the re-listed view; left for a follow-up.)
+      trail. **Tracked in the lifecycle workstream:** adapters skip
+      zero-credential identities on the next `Discover`, but this harness does
+      not yet assert the re-listed view; it remains a follow-up acceptance
+      test.
 - [x] **UI** — dashboard shows `provider` label (e.g. "AWS IAM"), ownership,
       urgency, expiry, and working Rotate / Retire from the dashboard; the list
       refreshes with provider state.

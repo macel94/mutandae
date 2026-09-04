@@ -1,21 +1,20 @@
 # Multi-cloud demo
 
-The Mutandae demo now starts from **three simulated clouds**: an Azure / Entra
-ID tenant, an AWS IAM account, and a Google Cloud project. Each provider is a
-separate simulated adapter under `internal/provider/`, and the composition
+The Mutandae demo defaults to **three credential-less simulated providers**: an
+Azure / Entra ID tenant, an AWS IAM account, and a Google Cloud project. Each
+provider is a separate adapter under `internal/provider/`, and the composition
 root (`cmd/mutandae`) fuses them behind one `MultiProvider` adapter so the
 control plane governs a single combined inventory over the μTandae Protocol.
 The browser dashboard and the versioned JSON API expose the same governed
 identities, lifecycle transitions, and audit evidence across clouds, with
 per-provider labels.
 
-None of the simulated providers require real credentials. The optional
-real-tenant workflow remains the Azure interactive extension documented in
-[azure-integration.md](azure-integration.md), isolated in an expiring in-memory
-session. What a caller must contribute to evaluate a real AWS IAM or GCP IAM
-integration is documented in [aws-integration.md](aws-integration.md),
-[gcp-integration.md](gcp-integration.md), and
-[integration-testing.md](integration-testing.md).
+The real Azure/Entra, AWS IAM, and GCP IAM adapters also ship in-tree. When the
+corresponding credentials are present, the composition root selects the real
+adapter and provider mutations are real; without them, local development and
+ordinary tests stay deterministic. The Azure interactive extension is documented
+in [azure-integration.md](azure-integration.md), and the real-cloud credential
+and permission contract is in [integration-testing.md](integration-testing.md).
 
 ## Run it
 
@@ -205,9 +204,12 @@ service-account key id (`<name>-service-key-N`).
 
 ### Retire across providers
 
-Retirement requires `confirm: true`; the adapter then disables the underlying
-registration (Entra app, IAM user, or service account), which disappears from
-the next discovery while the governed identity stays visible as `retired`:
+Retirement requires `confirm: true`; the adapter decommissions the
+provider-specific credential or object. In the local simulator this disables
+the modeled registration; the real adapters delete the covered provider
+credentials or objects as described in [providers.md](providers.md). The
+provider result disappears from the next discovery while the governed identity
+stays visible as `retired`:
 
 ```sh
 curl -s -X POST http://localhost:8080/api/v1/identities/metrics-publisher/retire \
@@ -255,11 +257,11 @@ curl -s -X POST http://localhost:8080/api/v1/identities/metrics-publisher/retire
 
 - [azure-demo.md](azure-demo.md) — Azure-focused walkthrough (protocol
   envelopes, seeded Azure registrations).
-- [aws-integration.md](aws-integration.md) — AWS IAM simulator and the
-  real-world integration contract (credentials, least-privilege IAM actions,
+- [aws-integration.md](aws-integration.md) — AWS IAM simulator, shipped real
+  adapter, and integration contract (credentials, least-privilege IAM actions,
   two-key rotation model).
-- [gcp-integration.md](gcp-integration.md) — GCP IAM simulator and the
-  real-world integration contract (project id, service-account JSON key,
+- [gcp-integration.md](gcp-integration.md) — GCP IAM simulator, shipped real
+  adapter, and integration contract (project id, service-account JSON key,
   `roles/iam.serviceAccountKeyAdmin`).
 - [providers.md](providers.md) — how each adapter populates
   `ProviderBinding`, the `Lifecycle.Adapter` boundary, and the generalized

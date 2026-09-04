@@ -46,10 +46,10 @@ Never use production credentials for tests. Follow
   clients themselves.
 - Keep lifecycle and protocol logic provider-neutral. Provider mechanics belong
   behind the adapter boundary.
-- Keep the project dependency-light. Cloud clients and provider integrations
-  use the Go standard library; do not add cloud SDKs or framework dependencies
-  without a documented reason and maintainer agreement. The existing Redis
-  client is an explicit infrastructure exception.
+- Keep provider clients and application logic standard-library-only. Do not add
+  cloud SDKs, web frameworks, or other third-party runtime dependencies without
+  a documented reason and maintainer agreement. The existing Redis client is an
+  explicit infrastructure exception for persistence and pub/sub.
 - Inject clocks, loggers, persistence/services, provider adapters, and outbound
   clients when they affect behavior or test determinism. Use a small interface
   at a real boundary, or a function type for one operation.

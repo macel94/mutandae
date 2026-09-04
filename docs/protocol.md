@@ -1072,6 +1072,6 @@ contract rather than on cloud SDK details; provider-specific execution never
 belongs in the protocol itself.
 
 See [providers.md](providers.md) for the companion reference on provider
-adapters, the shipped simulated adapters, the composite multi-cloud adapter,
-and how the interactive Azure / Entra extension generalizes to AWS IAM and GCP
-IAM.
+adapters, the shipped real and simulated adapters, the composite multi-cloud
+adapter, and how the interactive Azure / Entra extension generalizes to AWS IAM
+and GCP IAM.

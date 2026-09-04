@@ -15,31 +15,38 @@ The public layer includes:
 - state-machine and transition rules;
 - audit/event contracts;
 - minimal backend/control-plane shell;
-- local or simulated provider adapter;
+- credential-less simulators and standard-library real adapters for Azure/Entra,
+  AWS IAM, and GCP IAM;
+- the consuming-side adapter and optional vault boundaries;
 - examples, fixtures, and conformance tests;
 - architecture and security documentation.
 
-## Private layer
+## Commercial layer
 
-The private/commercial layer includes:
+The open release includes real provider clients, but a managed or commercial
+offering may add:
 
-- production provider-specific renewal engines;
-- Azure tenant-aware execution;
-- future AWS and GCP renewal implementations;
-- secure managed execution;
-- credential material handling and delivery;
-- provider-specific retries, edge cases, and recovery;
+- secure managed execution and deployment-specific credential delivery;
+- provider-specific operational safeguards, retries, edge cases, and recovery
+  maintained as a service;
+- broader provider and identity-class coverage;
 - advanced enterprise integrations;
-- managed operations and reliability tooling.
+- managed operations, availability, and reliability tooling.
+
+These are commercial operating and maintenance capabilities, not a claim that
+basic provider mechanics are absent from the public source.
 
 ## Boundary rules
 
 1. Public interfaces describe **what** lifecycle operation is requested and **what** result is expected.
-2. Private adapters implement **how** a provider-specific renewal is executed.
+2. Public adapters implement **how** a provider-specific operation is executed;
+   commercial deployments may add further execution policy and operations.
 3. Public code must not contain production provider credentials or hidden service endpoints.
 4. Public protocol schemas must not encode private implementation details.
 5. The frontend consumes control-plane contracts, not provider SDKs directly.
-6. Provider-specific identifiers may appear in public abstractions where needed, but private renewal algorithms and execution safeguards do not.
+6. Provider-specific identifiers may appear in public abstractions where needed;
+   deployment-specific credentials, policy, and operational safeguards remain
+   outside the source tree.
 7. The public simulator must model meaningful success and failure states rather than pretending to be production execution.
 8. Security documentation must state what is and is not protected by the open layer.
 

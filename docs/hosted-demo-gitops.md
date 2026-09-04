@@ -7,9 +7,11 @@ The native deployment currently exposes:
 - `https://mutandae.com` — live demo
 - `https://preview.mutandae.com` — preview/sandbox demo
 
-Both hosts are intended to be easy-to-follow public simulators. The application
-has a safe read-only configuration page at `/configuration` and a matching
-protocol endpoint at `/api/v1/configuration`.
+Both hosts are public demonstrations with a safe read-only configuration page
+at `/configuration` and a matching protocol endpoint at
+`/api/v1/configuration`. Local development defaults to simulators; the hosted
+live and preview deployments can use namespace-scoped real adapters and must be
+operated as real mutation surfaces.
 
 ## Runtime model
 
@@ -27,8 +29,9 @@ mutandae-preview --REDIS_URL--> Redis
 Redis stores protocol-native JSON snapshots and publishes invalidation messages
 on each environment's `<prefix>:changes` channel. It is a fast temporary demo
 store, not a durable event log. Restarting Redis or deleting an environment
-snapshot resets that environment to the simulated Azure seed on next startup.
-Do not put real Azure credentials, customer data, or secrets into the demo.
+snapshot causes the next startup to rediscover the configured provider
+inventory, or to load simulator seeds when credentials are absent. Do not put
+customer credentials, customer data, or secrets into the demo.
 
 ## Cluster μVault (common demo vault)
 
