@@ -352,7 +352,9 @@ func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
 			{Rel: "identities", Method: http.MethodGet, HREF: "/api/v1/identities", Envelope: "list"},
 			{Rel: "identity", Method: http.MethodGet, HREF: "/api/v1/identities/{id}", Envelope: "inspect"},
 			{Rel: "register", Method: http.MethodPost, HREF: "/api/v1/identities", Envelope: "register"},
+			{Rel: "provision", Method: http.MethodPost, HREF: "/api/v1/demo/identities", Envelope: "provision"},
 			{Rel: "rotate", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/rotations", Envelope: "rotate"},
+			{Rel: "use", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/use", Envelope: "use"},
 			{Rel: "retire", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/retire", Envelope: "retire"},
 		},
 	})
@@ -722,7 +724,7 @@ func (s *Server) apiRotate(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.lifecycle.Rotate(r.Context(), req, s.now())
 	if err != nil {
-		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		s.writeJSON(w, s.mutationErrorStatus(err), protocol.Failure(lifecycle.NewError(err)))
 		return
 	}
 	s.writeJSON(w, http.StatusOK, resp)
@@ -740,10 +742,20 @@ func (s *Server) apiRetire(w http.ResponseWriter, r *http.Request) {
 	body.RequestedBy = operatorOrDefault(r)
 	resp, err := s.lifecycle.Retire(r.Context(), body, s.now())
 	if err != nil {
-		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		s.writeJSON(w, s.mutationErrorStatus(err), protocol.Failure(lifecycle.NewError(err)))
 		return
 	}
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// mutationErrorStatus maps lifecycle errors onto mutation status codes:
+// unknown identities are 404 like every other read, everything else stays a
+// 409 conflict so callers can retry a legitimately blocked transition.
+func (s *Server) mutationErrorStatus(err error) int {
+	if errors.Is(err, lifecycle.ErrNotFound) {
+		return http.StatusNotFound
+	}
+	return http.StatusConflict
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -85,8 +85,9 @@ type CommonVault interface {
 }
 
 // ErrVaultUnsupported is returned when an operation needs a vault but the
-// adapter has none configured.
-var ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
+// adapter has none configured. It aliases the canonical protocol sentinel so
+// provider adapters and the control plane agree on one value for errors.Is.
+var ErrVaultUnsupported = protocol.ErrVaultUnsupported
 
 // ErrorCode translates a lifecycle error to the closest protocol ErrorCode so
 // handlers can emit a conformant failure envelope.

@@ -327,6 +327,29 @@ imperatively, never committed). The Deployment reads them via `secretKeyRef`
 `MUTANDAE_ENVIRONMENT=live` container **fails to start** if any third credential
 set is missing — there is no silent fall back to a simulator.
 
+## The demo vault (retrieve under audit)
+
+Every provisioned or renewed credential is mirrored into the **cluster μVault**
+(a HashiCorp Vault KV v2 server running in the demo namespace). The one-time
+secret is still disclosed exactly once in the provision response; the vault
+copy is what makes later retrieval possible:
+
+- **Retrieve**: the inventory's labeled *Retrieve* action (and
+  `POST /api/v1/identities/{id}/use`) reads the current version from the vault.
+  Every retrieval is audited as `credential.used` with the vault reference and
+  actor — never secret material.
+- **Rotate**: writes a fresh version of the same vault secret, so consumers of
+  an old version are never stranded.
+- **Retire**: revokes the vault copy; retrieval then fails closed.
+
+Provider-native vaults stay optional. Azure's Key Vault works out of the box
+for the demo (the governor has the data-plane role). AWS Secrets Manager and
+GCP Secret Manager are enabled in configuration but the governors deliberately
+hold no such permissions; a deterministic authorization denial is treated as
+"capability absent in practice": delivery skips silently, reads fall back to
+the cluster μVault, and genuine vault outages still surface as attention
+events without silently switching vaults.
+
 ## Verification
 
 - Unit: `internal/provider/create_test.go` proves the AWS and GCP create paths

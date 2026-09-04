@@ -38,6 +38,7 @@ type awsSecretsManagerAPIError struct {
 	code             string
 	detail           string
 	resourceNotFound bool
+	unauthorized     bool
 }
 
 func (e *awsSecretsManagerAPIError) Error() string {
@@ -65,6 +66,9 @@ func (a *AWSAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 	}
 	var response awsSecretsManagerResponse
 	if err := a.secretsRequest(ctx, "PutSecretValue", payload, &response, secret); err != nil {
+		if awsSecretsManagerDenied(err) {
+			return protocol.VaultReference{}, fmt.Errorf("%w: AWS Secrets Manager denied the credential write", ErrVaultUnsupported)
+		}
 		if !awsSecretsManagerResourceNotFound(err) {
 			return protocol.VaultReference{}, err
 		}
@@ -80,12 +84,18 @@ func (a *AWSAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 			},
 		}
 		if err := a.secretsRequest(ctx, "CreateSecret", createPayload, nil, secret); err != nil {
+			if awsSecretsManagerDenied(err) {
+				return protocol.VaultReference{}, fmt.Errorf("%w: AWS Secrets Manager denied the credential write", ErrVaultUnsupported)
+			}
 			return protocol.VaultReference{}, err
 		}
 		// CreateSecret creates the initial version, but the PutSecretValue retry
 		// makes the write path converge on the same versioning operation as a
 		// previously-created secret.
 		if err := a.secretsRequest(ctx, "PutSecretValue", payload, &response, secret); err != nil {
+			if awsSecretsManagerDenied(err) {
+				return protocol.VaultReference{}, fmt.Errorf("%w: AWS Secrets Manager denied the credential write", ErrVaultUnsupported)
+			}
 			return protocol.VaultReference{}, err
 		}
 	}
@@ -118,6 +128,9 @@ func (a *AWSAdapter) ReadSecret(ctx context.Context, identity protocol.MachineId
 	}
 	var response awsSecretsManagerResponse
 	if err := a.secretsRequest(ctx, "GetSecretValue", payload, &response); err != nil {
+		if awsSecretsManagerDenied(err) {
+			return "", protocol.VaultReference{}, fmt.Errorf("%w: AWS Secrets Manager denied the credential read", ErrVaultUnsupported)
+		}
 		return "", protocol.VaultReference{}, err
 	}
 	if response.SecretString == "" {
@@ -148,6 +161,9 @@ func (a *AWSAdapter) RevokeSecret(ctx context.Context, identity protocol.Machine
 		"RecoveryWindowInDays": 7,
 	}
 	if err := a.secretsRequest(ctx, "DeleteSecret", payload, nil); err != nil {
+		if awsSecretsManagerDenied(err) {
+			return protocol.VaultReference{}, fmt.Errorf("%w: AWS Secrets Manager denied the credential revocation", ErrVaultUnsupported)
+		}
 		if !awsSecretsManagerResourceNotFound(err) {
 			return protocol.VaultReference{}, err
 		}
@@ -318,12 +334,27 @@ func (a *AWSAdapter) awsSecretsManagerAPIError(operation string, status int, dat
 		code:             a.awsRedactedString(code, extraRedactions...),
 		detail:           a.awsRedactedString(fmt.Sprintf("%s: %s", operation, detail), extraRedactions...),
 		resourceNotFound: status == http.StatusNotFound && strings.Contains(code, "ResourceNotFoundException"),
+		// Secrets Manager reports authorization failures as AccessDenied*
+		// (observed on HTTP 400) or as plain HTTP 403. A deterministic denial
+		// means the wired credentials were never granted the vault capability,
+		// which the adapter treats as "unsupported in practice".
+		unauthorized: status == http.StatusForbidden || strings.Contains(code, "AccessDenied"),
 	}
 }
 
 func awsSecretsManagerResourceNotFound(err error) bool {
 	var apiErr *awsSecretsManagerAPIError
 	return errors.As(err, &apiErr) && apiErr.resourceNotFound
+}
+
+// awsSecretsManagerDenied reports whether Secrets Manager rejected the call
+// because the caller is not authorized. Mapping the denial onto the canonical
+// ErrVaultUnsupported sentinel keeps the demo honest and quiet: provision
+// delivery skips instead of spamming failure events, and credential reads
+// fall back to the cluster μVault copy.
+func awsSecretsManagerDenied(err error) bool {
+	var apiErr *awsSecretsManagerAPIError
+	return errors.As(err, &apiErr) && apiErr.unauthorized
 }
 
 func (a *AWSAdapter) awsRedactedString(value string, extra ...string) string {

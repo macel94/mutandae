@@ -26,6 +26,7 @@ func ParseISO8601Duration(value string) (time.Duration, error) {
 
 	token := ""
 	inTime := false
+	timeComponents := 0
 	total := time.Duration(0)
 	count := 0
 	flush := func(unit byte) error {
@@ -42,6 +43,9 @@ func ParseISO8601Duration(value string) (time.Duration, error) {
 		}
 		total += d
 		count++
+		if inTime {
+			timeComponents++
+		}
 		token = ""
 		return nil
 	}
@@ -73,6 +77,12 @@ func ParseISO8601Duration(value string) (time.Duration, error) {
 	}
 	if token != "" {
 		return 0, fmt.Errorf("protocol: trailing value %q in %q", token, value)
+	}
+	if inTime && timeComponents == 0 {
+		// "P1DT" is not valid ISO-8601: the time designator must introduce at
+		// least one time component. Accepting it would let silently truncated
+		// durations round-trip as different values.
+		return 0, fmt.Errorf("protocol: time designator without components in %q", value)
 	}
 	if count == 0 {
 		return 0, fmt.Errorf("protocol: no duration components in %q", value)

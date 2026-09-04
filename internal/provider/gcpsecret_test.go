@@ -390,3 +390,30 @@ func TestGCPSecretRejectsNonDemoIdentity(t *testing.T) {
 		})
 	}
 }
+
+// TestGCPSecretDenialMapsToUnsupported proves the live-demo degradation path:
+// when Secret Manager deterministically denies the governor service account
+// (the demo grants no secretmanager permissions), every vault operation
+// reports the canonical ErrVaultUnsupported so delivery skips silently and
+// reads fall back to the cluster μVault copy.
+func TestGCPSecretDenialMapsToUnsupported(t *testing.T) {
+	fixed := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	identity := demoGCPIdentity("mutandae-demo-denied", fixed.Add(90*24*time.Hour))
+	denied := func(w http.ResponseWriter, r *http.Request, body []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"status":"PERMISSION_DENIED","message":"Caller does not have permission"}}`))
+	}
+	server, adapter := newGCPSecretTestServer(t, fixed, denied, true)
+	defer server.Close()
+
+	if _, err := adapter.StoreSecret(context.Background(), identity, "key-1", "secret"); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("StoreSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+	if _, _, err := adapter.ReadSecret(context.Background(), identity, "key-1", "latest"); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("ReadSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+	if _, err := adapter.RevokeSecret(context.Background(), identity, "key-1"); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("RevokeSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+}

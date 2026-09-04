@@ -23,9 +23,9 @@
     <main class="configuration-page" id="configuration-app">
       <section class="hero configuration-hero">
         <div class="hero-copy">
-          <p class="eyebrow">Public demo · configuration and integration <span class="eyebrow-line"></span></p>
+          <p class="hero-standfirst">Public demo · configuration and integration <span class="eyebrow-line"></span></p>
           <h1>Connect what<br><em>you own.</em></h1>
-          <p class="hero-lede">Explore the multi-cloud simulator safely (Azure/Entra, AWS IAM, GCP IAM), or open a short-lived session against an Azure / Entra tenant you control. Real-tenant credentials never enter Redis, snapshots, events, logs, or HTML.</p>
+          <p class="hero-lede">Create real, zero-permission identities in the Azure, AWS, and GCP tenants this demo governs, or open a short-lived session against an Azure / Entra tenant you control. Real-tenant credentials never enter Redis, snapshots, events, logs, or HTML.</p>
         </div>
       </section>
       <section class="config-warning" role="alert">
@@ -33,16 +33,14 @@
       </section>
       {{ if .Provision }}
       <section class="panel config-card" aria-labelledby="provision-title">
-        <p class="section-kicker">Live demo · create a real identity</p>
         <h2 id="provision-title">Create a zero-permission identity in a real tenant</h2>
-        <p class="muted">Pick the identity type and press <strong>New identity</strong>: the identity is created for real in that cloud's tenant with <strong>no permissions</strong> — no AWS policy, no GCP role, no Azure API permission or admin consent — and the secret is delivered straight into that cloud's native vault (Azure Key Vault, AWS Secrets Manager, or GCP Secret Manager). You can retrieve it again any time; every use and renewal is logged. The demo auto-reclaims the oldest identity at its quota and throttles requests per client.</p>
+        <p class="muted">Pick the identity type and press <strong>New identity</strong>: the identity is created for real in that cloud's tenant with <strong>no permissions</strong> (no AWS policy, no GCP role, no Azure API permission or admin consent) and the secret is mirrored into the cluster vault. You can retrieve it again any time; every use and renewal is logged. The demo auto-reclaims the oldest identity at its quota and throttles requests per client.</p>
         {{ template "new-identity" (newIdentity .Provision "provision-target") }}
         <div id="provision-target" class="provision-target"></div>
       </section>
       {{ end }}
       <section class="config-grid" aria-label="Runtime configuration details">
         <article class="panel config-card">
-          <p class="section-kicker">Runtime</p>
           <h2>Environment contract</h2>
           <dl class="config-list">
             <div><dt>Environment</dt><dd>{{ .Environment }}</dd></div>
@@ -53,7 +51,6 @@
           </dl>
         </article>
         <article class="panel config-card">
-          <p class="section-kicker">Demo mode</p>
           <h2>What is enabled</h2>
           <ul class="feature-list">
             {{ range .Features }}<li><span class="status-dot"></span>{{ . }}</li>{{ end }}
@@ -64,7 +61,6 @@
       </section>
       {{ if .IntegrationEnabled }}
       <section class="panel config-card integration-panel" aria-labelledby="integration-title">
-        <p class="section-kicker">Optional · bring your own tenant</p>
         <h2 id="integration-title">Try the official Azure protocol path</h2>
         <p class="muted">Mutandae uses Microsoft Graph application APIs with the least-privileged application permission required for the operations below. It checks Graph ownership before every mutation.</p>
         <div class="requirements-grid">
@@ -103,7 +99,7 @@
         </form>
       </section>
       <section id="integration-workspace" class="panel config-card integration-panel is-hidden" aria-labelledby="workspace-title">
-        <div class="panel-heading integration-heading"><div><p class="section-kicker">Ephemeral session</p><h2 id="workspace-title">Your owned applications</h2></div><button id="disconnect-button" class="button button-secondary" type="button">Disconnect and clear credentials</button></div>
+        <div class="panel-heading integration-heading"><div><h2 id="workspace-title">Your owned applications</h2></div><button id="disconnect-button" class="button button-secondary" type="button">Disconnect and clear credentials</button></div>
         <p id="session-summary" class="muted"></p>
         <div class="form-grid app-create-form"><label class="span-two">New application display name<input id="new-application-name" maxlength="120" placeholder="mutandae-demo-owned-app"></label><button id="create-application-button" class="button button-primary" type="button">Create application</button></div>
         <div id="application-list" class="application-list"></div>
@@ -111,9 +107,8 @@
       </section>
       {{ end }}
       <section class="panel config-card config-next">
-        <p class="section-kicker">Continue the walkthrough</p>
-        <h2>Try the simulator first</h2>
-        <p>Return to the dashboard to inspect synthetic identities, rotate a credential, and follow the correlated lifecycle events. The API discovery document is available at <code>/api/v1/</code>.</p>
+        <h2>Continue on the dashboard</h2>
+        <p>Return to the dashboard to inspect the live identities, retrieve a credential from the vault, rotate it, and follow the correlated lifecycle events. The API discovery document is available at <code>/api/v1/</code>.</p>
         <a class="button button-secondary" href="/">Open demo dashboard</a>
       </section>
     </main>

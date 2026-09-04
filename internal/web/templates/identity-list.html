@@ -23,21 +23,23 @@
   <tbody>
     {{ range .Identities }}
     <tr data-search="{{ .SearchText }}" data-urgency="{{ .Urgency }}">
-      <td>
+      <td data-label="Identity">
         <div class="identity-name"><span class="identity-avatar">{{ printf "%.1s" .Name }}</span><span title="{{ .Name }}"><strong title="{{ .Name }}">{{ .Name }}</strong><small>{{ .Environment }}</small></span></div>
       </td>
-      <td><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
-      <td><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
-      <td class="vault-cell">
-        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span title="{{ .VaultLabel }} · {{ .VaultVersion }}"><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else if .CommonVaultVersion }}<span class="vault-cluster">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</span>{{ else }}<span class="vault-none">—</span>{{ end }}{{ if and .VaultVersion .CommonVaultVersion }}<small class="vault-cluster" title="{{ .CommonVaultLabel }} · {{ .CommonVaultVersion }}">{{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</small>{{ end }}
+      <td data-label="Owner / workload"><div class="owner-cell"><strong>{{ .Owner }}</strong><small>{{ .Workload }}</small></div></td>
+      <td data-label="Provider"><span class="provider"><span class="provider-mark">{{ .ProviderMark }}</span>{{ .Provider }}</span></td>
+      <td class="vault-cell" data-label="Vault">
+        {{ if .VaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span title="{{ .VaultLabel }} · {{ .VaultVersion }}"><strong>{{ .VaultLabel }}</strong><small>version {{ shortVersion .VaultVersion }}</small></span></span>{{ else if .CommonVaultVersion }}<span class="provider"><span class="provider-mark vault-mark">✓</span><span title="{{ .CommonVaultLabel }} · {{ .CommonVaultVersion }}"><strong>{{ .CommonVaultLabel }}</strong><small>version {{ shortVersion .CommonVaultVersion }}</small></span></span>{{ else }}<span class="vault-none">—</span>{{ end }}{{ if and .VaultVersion .CommonVaultVersion }}<small class="vault-cluster" title="{{ .CommonVaultLabel }} · {{ .CommonVaultVersion }}">+ {{ .CommonVaultLabel }} · v{{ .CommonVaultVersion }}</small>{{ end }}
       </td>
-      <td><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
-      <td><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
-      <td class="actions-cell">
-        <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#audit-modal-content" hx-swap="innerHTML">↗</button>
-        {{ if ne .State "retired" }}{{ if .VaultVersion }}<button class="icon-button" type="button" title="Use — retrieve the credential from {{ .VaultLabel }} (audited)" aria-label="Use {{ .Name }} — retrieve from vault" hx-post="/identities/{{ .ID }}/use" hx-target="#audit-modal-content" hx-swap="innerHTML">✦</button>{{ end }}{{ end }}
-        {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
-        {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance and disables its vault copy.">Retire</button>{{ end }}
+      <td data-label="Expiry"><div class="expiry-cell"><strong>{{ .ExpiryRelative }}</strong><small>{{ .ExpiryLabel }}</small></div></td>
+      <td data-label="Status"><span class="badge badge-{{ .UrgencyClass }}"><span class="badge-dot"></span>{{ .UrgencyLabel }}</span></td>
+      <td class="actions-cell" data-label="Actions">
+        <div class="actions-row">
+          <button class="icon-button" type="button" title="Inspect audit trail" aria-label="Inspect {{ .Name }} audit trail" hx-get="/identities/{{ .ID }}/events" hx-target="#audit-modal-content" hx-swap="innerHTML">↗</button>
+          {{ if and (ne .State "retired") (or .VaultVersion .CommonVaultVersion) }}<button class="button button-small button-retrieve" type="button" title="Retrieve the current credential from {{ if .VaultVersion }}{{ .VaultLabel }}{{ else }}{{ .CommonVaultLabel }}{{ end }} — audited" aria-label="Retrieve {{ .Name }} credential from the vault" hx-post="/identities/{{ .ID }}/use" hx-target="#audit-modal-content" hx-swap="innerHTML"><span class="button-icon">✦</span>Retrieve</button>{{ end }}
+          {{ if ne .State "retired" }}<button class="button button-small" type="button" hx-post="/identities/{{ .ID }}/rotate" hx-target="#identity-list" hx-swap="outerHTML">Rotate</button>{{ end }}
+          {{ if ne .State "retired" }}<button class="button button-small button-danger" type="button" hx-post="/identities/{{ .ID }}/retire" hx-target="#identity-list" hx-swap="outerHTML" hx-confirm="Retire {{ .Name }}? This is an explicit decommissioning.\n\nThis removes the identity from active governance and disables its vault copy.">Retire</button>{{ end }}
+        </div>
       </td>
     </tr>
     {{ else }}

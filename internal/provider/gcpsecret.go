@@ -61,6 +61,9 @@ func (a *GCPAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 	path := a.gcpSecretAddVersionPath(name)
 	var response gcpSecretVersion
 	err = a.iamJSON(ctx, http.MethodPost, path, body, &response)
+	if err != nil && gcpVaultDenied(err) {
+		return protocol.VaultReference{}, fmt.Errorf("%w: GCP Secret Manager denied the credential write", ErrVaultUnsupported)
+	}
 	if err != nil && gcpVaultNotFound(err) {
 		createBody := map[string]any{
 			"replication": map[string]any{
@@ -72,6 +75,9 @@ func (a *GCPAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 		}
 		createPath := a.gcpSecretCreatePath(name)
 		if createErr := a.iamJSON(ctx, http.MethodPost, createPath, createBody, nil); createErr != nil {
+			if gcpVaultDenied(createErr) {
+				return protocol.VaultReference{}, fmt.Errorf("%w: GCP Secret Manager denied the credential write", ErrVaultUnsupported)
+			}
 			return protocol.VaultReference{}, a.redactGCPVaultError(ctx, createErr, secret)
 		}
 		// POST mutations are intentionally not retried by iamJSON. This is the
@@ -80,6 +86,9 @@ func (a *GCPAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 		err = a.iamJSON(ctx, http.MethodPost, path, body, &response)
 	}
 	if err != nil {
+		if gcpVaultDenied(err) {
+			return protocol.VaultReference{}, fmt.Errorf("%w: GCP Secret Manager denied the credential write", ErrVaultUnsupported)
+		}
 		return protocol.VaultReference{}, a.redactGCPVaultError(ctx, err, secret)
 	}
 	version, err := gcpVaultVersion(response.Name)
@@ -118,6 +127,9 @@ func (a *GCPAdapter) ReadSecret(ctx context.Context, identity protocol.MachineId
 	var response gcpSecretAccessResponse
 	path := a.gcpSecretAccessPath(name, version)
 	if err := a.iamJSON(ctx, http.MethodGet, path, nil, &response); err != nil {
+		if gcpVaultDenied(err) {
+			return "", protocol.VaultReference{}, fmt.Errorf("%w: GCP Secret Manager denied the credential read", ErrVaultUnsupported)
+		}
 		return "", protocol.VaultReference{}, a.redactGCPVaultError(ctx, err, "")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(response.Payload.Data)
@@ -154,6 +166,9 @@ func (a *GCPAdapter) RevokeSecret(ctx context.Context, identity protocol.Machine
 	var response gcpSecretVersion
 	path := a.gcpSecretDisablePath(name)
 	if err := a.iamJSON(ctx, http.MethodPost, path, nil, &response); err != nil {
+		if gcpVaultDenied(err) {
+			return protocol.VaultReference{}, fmt.Errorf("%w: GCP Secret Manager denied the credential revocation", ErrVaultUnsupported)
+		}
 		if gcpVaultNotFound(err) {
 			return protocol.VaultReference{
 				URL:        a.secretBaseURL,
@@ -259,6 +274,21 @@ func gcpVaultNotFound(err error) bool {
 	return strings.Contains(text, "returned HTTP 404") ||
 		strings.Contains(text, "returned NOT_FOUND (404)") ||
 		strings.Contains(text, "returned  (404)")
+}
+
+// gcpVaultDenied reports whether Secret Manager rejected the call because the
+// caller is not authorized (HTTP 403 / PERMISSION_DENIED). A deterministic
+// denial means the wired service account was never granted the Secret Manager
+// capability, so the adapter reports the canonical ErrVaultUnsupported:
+// delivery skips silently and reads fall back to the cluster μVault copy.
+func gcpVaultDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "returned HTTP 403") ||
+		strings.Contains(text, "returned  (403)") ||
+		strings.Contains(text, "PERMISSION_DENIED")
 }
 
 // redactGCPVaultError preserves context cancellation and removes both the

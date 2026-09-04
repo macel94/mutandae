@@ -43,7 +43,7 @@ func TestDashboardRendersAuditModalMarkup(t *testing.T) {
 		`role="dialog"`,
 		`aria-modal="true"`,
 		`aria-labelledby="audit-modal-title"`,
-		`<p class="section-kicker">Audit trail</p>`,
+		`<p class="modal-heading">Audit trail</p>`,
 		`class="modal-close" type="button" aria-label="Close audit trail"`,
 		`<div class="modal-body" id="audit-modal-content"></div>`,
 	} {
@@ -342,8 +342,8 @@ func TestVaultCellRendersClusterVaultCopy(t *testing.T) {
 	if !strings.Contains(body, "μVault (cluster) · v7") {
 		t.Error("identity with both vaults must show the cluster vault line")
 	}
-	// Cluster-only vault replaces the em-dash.
-	if !strings.Contains(body, "μVault (cluster) · v2") {
+	// Cluster-only vault gets the same marked treatment as a native vault.
+	if !strings.Contains(body, "μVault (cluster)</strong><small>version 2</small>") {
 		t.Error("identity with only a cluster vault must show the cluster vault line instead of the em-dash")
 	}
 	if strings.Contains(body, "vault-none") {

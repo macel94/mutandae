@@ -2,15 +2,14 @@ package provider
 
 import (
 	"context"
-	"errors"
 
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
-// ErrVaultUnsupported is returned when a provider adapter has no vault
-// capability (a simulator, or a live adapter without a configured vault). The
-// web layer maps it to a 409 conflict with an actionable message.
-var ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
+// ErrVaultUnsupported is the protocol-canonical sentinel for a missing (or
+// practically denied) vault capability. Adapters return it unchanged so the
+// control plane's errors.Is checks match across the package boundary.
+var ErrVaultUnsupported = protocol.ErrVaultUnsupported
 
 // CloudVault is the provider-neutral vault delivery capability of a
 // CloudAdapter. It stores and retrieves credential material in the provider's

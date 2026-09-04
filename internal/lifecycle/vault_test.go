@@ -387,3 +387,22 @@ func TestRetireVaultRevocationFailureIsAuditedAndNonFatal(t *testing.T) {
 		t.Fatal("vault revocation failure was not audited as attention")
 	}
 }
+
+// wrappedUnsupportedVaultAdapter mimics the real provider adapters, which wrap
+// the canonical sentinel with operation context (fmt.Errorf %w) when a native
+// vault is absent or deterministically denied.
+type wrappedUnsupportedVaultAdapter struct {
+	*provisioningAdapter
+}
+
+func (w *wrappedUnsupportedVaultAdapter) StoreSecret(context.Context, protocol.MachineIdentity, string, string) (protocol.VaultReference, error) {
+	return protocol.VaultReference{}, fmt.Errorf("%w: native vault denied the write", ErrVaultUnsupported)
+}
+
+func (w *wrappedUnsupportedVaultAdapter) ReadSecret(context.Context, protocol.MachineIdentity, string, string) (string, protocol.VaultReference, error) {
+	return "", protocol.VaultReference{}, fmt.Errorf("%w: native vault denied the read", ErrVaultUnsupported)
+}
+
+func (w *wrappedUnsupportedVaultAdapter) RevokeSecret(context.Context, protocol.MachineIdentity, string) (protocol.VaultReference, error) {
+	return protocol.VaultReference{}, fmt.Errorf("%w: native vault denied the revocation", ErrVaultUnsupported)
+}

@@ -427,3 +427,35 @@ func TestAWSSecretsRejectsInvalidName(t *testing.T) {
 		t.Fatal("ReadSecret() accepted a derived name containing an invalid character")
 	}
 }
+
+// TestAWSSecretsDenialMapsToUnsupported proves the live-demo degradation path:
+// when Secrets Manager deterministically denies the governor (the demo grants
+// no secretsmanager permissions), every vault operation reports the canonical
+// ErrVaultUnsupported so delivery skips silently and reads fall back to the
+// cluster μVault copy instead of failing.
+func TestAWSSecretsDenialMapsToUnsupported(t *testing.T) {
+	secret := "write-only-secret-value"
+	var calls int
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"__type":"com.amazonaws.secretsmanager#AccessDeniedException","code":"AccessDeniedException","message":"User is not authorized to perform: secretsmanager:GetSecretValue"}`))
+	})
+	adapter, server := newAWSSecretsTestAdapter(t, handler, "")
+	defer server.Close()
+	identity := awsSecretsTestIdentity()
+
+	if _, err := adapter.StoreSecret(context.Background(), identity, "key-1", secret); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("StoreSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+	if _, _, err := adapter.ReadSecret(context.Background(), identity, "key-1", "current"); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("ReadSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+	if _, err := adapter.RevokeSecret(context.Background(), identity, "key-1"); !errors.Is(err, ErrVaultUnsupported) {
+		t.Errorf("RevokeSecret() denied error = %v, want ErrVaultUnsupported", err)
+	}
+	if strings.Contains(fmt.Sprint(calls), secret) || calls == 0 {
+		t.Errorf("denial handler call count = %d, want >0", calls)
+	}
+}

@@ -753,3 +753,29 @@ func TestConcurrentLifecycleWithClusterVaultIsDeterministic(t *testing.T) {
 		t.Fatalf("successful revocation events = %d, want 2 (native + cluster)", revoked)
 	}
 }
+
+// TestUseFallsBackOnWrappedNativeUnsupported locks the cross-package sentinel
+// contract: adapters wrap ErrVaultUnsupported with context (fmt.Errorf %w) and
+// the control plane must still recognize it as "native capability absent" and
+// serve the credential from the cluster μVault copy.
+func TestUseFallsBackOnWrappedNativeUnsupported(t *testing.T) {
+	t.Parallel()
+	adapter := &wrappedUnsupportedVaultAdapter{provisioningAdapter: &provisioningAdapter{fakeAdapter: &fakeAdapter{}}}
+	common := newClusterVaultFake()
+	store := commonVaultStore(t, adapter, common)
+
+	resp, err := store.Provision(context.Background(), protocol.ProvisionRequest{Provider: "aws-iam"}, now())
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	used, err := store.Use(context.Background(), protocol.UseRequest{ID: resp.Identity.ID, RequestedBy: "visitor"}, now())
+	if err != nil {
+		t.Fatalf("Use with a wrapped unsupported native vault: %v", err)
+	}
+	if used.Secret != "top-secret" || used.Vault == nil || used.Vault.URL != "muvault://cluster" {
+		t.Fatalf("Use = (secret %q, vault %+v), want the cluster copy", used.Secret, used.Vault)
+	}
+	if usedEvent(t, store, resp.Identity.ID).Details["vault_kind"] != commonVaultKind {
+		t.Fatal("fallback retrieval must be audited as a cluster vault read")
+	}
+}

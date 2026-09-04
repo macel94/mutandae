@@ -1,7 +1,6 @@
 {{ define "provision" }}
 <div class="provision-result-wrap">
   <div class="provision-result panel" role="alert">
-    <p class="section-kicker">Real identity provisioned · zero permissions</p>
     <h3>Here is your one-time credential for {{ .Identity.Provider }}</h3>
     <p class="muted">{{ .Instructions }}</p>
     <dl class="config-list credential-details">
@@ -11,7 +10,7 @@
     </dl>
     {{ if .Secret }}
     <label class="secret-disclosure">
-      <span>One-time secret — copy it now{{ if .Vault }}; a vault copy keeps it retrievable{{ end }}</span>
+      <span>One-time secret: copy it now{{ if .Vault }}; a vault copy keeps it retrievable{{ end }}</span>
       <textarea readonly rows="6" onfocus="this.select()">{{ .Secret }}</textarea>
     </label>
     {{ end }}

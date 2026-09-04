@@ -31,7 +31,7 @@
     <main id="overview">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Machine identity control plane <span class="eyebrow-line"></span></p>
+          <p class="hero-standfirst">Machine identity control plane <span class="eyebrow-line"></span></p>
           <h1>Govern what<br><em>must change.</em></h1>
           <p class="hero-lede">A clear lifecycle for non-human identities. See ownership, expiry, renewal health, and the evidence behind every change.</p>
           {{ if .Provision }}{{ template "new-identity" (newIdentity .Provision "provision-slot") }}{{ end }}
@@ -74,7 +74,6 @@
         <section class="panel inventory-panel" aria-labelledby="inventory-title">
           <div class="panel-heading inventory-heading">
             <div>
-              <p class="section-kicker">Lifecycle inventory</p>
               <h2 id="inventory-title">Machine identities</h2>
             </div>
             <div class="inventory-actions">
@@ -99,23 +98,104 @@
             </div>
           </div>
           {{ template "identity-list" . }}
-          <div class="table-note"><span class="status-dot"></span>{{ if .LiveReal }}Live demo — real zero-permission identities{{ else }}Simulator data{{ end }} · Last checked {{ .UpdatedAt }}</div>
+          <div class="table-note"><span class="status-dot"></span>{{ if .LiveReal }}Live demo · real zero-permission identities{{ else }}Simulator data{{ end }} · Last checked {{ .UpdatedAt }}</div>
         </section>
       </div>
 
       <section class="protocol-explainer panel" id="protocol" aria-labelledby="protocol-title">
         <div class="panel-heading protocol-heading">
           <div>
-            <p class="section-kicker">Open contract</p>
             <h2>What is the μTandae Protocol?</h2>
           </div>
           <span class="environment-chip"><span class="status-dot"></span>Protocol v1 · application/vnd.mutandae.v1+json</span>
         </div>
+        <div class="protocol-flow">
+          <svg class="flow-desktop" viewBox="0 0 980 240" role="img" aria-labelledby="flow-d-title flow-d-desc" focusable="false">
+            <title id="flow-d-title">How a Mutandae credential flows</title>
+            <desc id="flow-d-desc">A visitor asks the throttled Mutandae API; least-privilege governor principals create a zero-permission identity in the real cloud tenants; the one-time secret is mirrored into the cluster vault; retrieval loops back, audited every time.</desc>
+            <defs>
+              <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#87969a"/></marker>
+              <marker id="flow-arrow-teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#177d78"/></marker>
+            </defs>
+            <g stroke="#87969a" stroke-width="1.5">
+              <line x1="146" y1="106" x2="164" y2="106" marker-end="url(#flow-arrow)"/>
+              <line x1="354" y1="106" x2="372" y2="106" marker-end="url(#flow-arrow)"/>
+              <line x1="582" y1="106" x2="600" y2="106" marker-end="url(#flow-arrow)"/>
+              <line x1="802" y1="106" x2="820" y2="106" marker-end="url(#flow-arrow)"/>
+            </g>
+            <g font-family="Georgia, 'Times New Roman', serif" font-size="15" fill="#17262d" text-anchor="middle">
+              <text x="78" y="98">Visitor</text>
+              <text x="260" y="92">μTandae API</text>
+              <text x="478" y="92">Governor principals</text>
+              <text x="702" y="92">Real cloud tenants</text>
+              <text x="896" y="92">μVault · KV v2</text>
+            </g>
+            <g font-family="system-ui, sans-serif" font-size="12" fill="#52646b" text-anchor="middle">
+              <text x="78" y="119">public demo user</text>
+              <text x="260" y="112">throttle · demo quota</text>
+              <text x="260" y="128">protocol v1 · JSON</text>
+              <text x="478" y="112">least privilege:</text>
+              <text x="478" y="128">create · rotate · retire</text>
+              <text x="702" y="112">AWS IAM · GCP IAM · Entra ID</text>
+              <text x="702" y="128">zero-permission identities</text>
+              <text x="896" y="112">one-time secret shown once,</text>
+              <text x="896" y="128">versioned copy kept here</text>
+            </g>
+            <g>
+              <rect x="12" y="58" width="132" height="96" rx="9" fill="#ffffff" stroke="#d0dad4"/>
+              <rect x="168" y="58" width="184" height="96" rx="9" fill="#fff0eb" stroke="#a93f2d"/>
+              <rect x="376" y="58" width="204" height="96" rx="9" fill="#ffffff" stroke="#d0dad4"/>
+              <rect x="604" y="58" width="196" height="96" rx="9" fill="#ffffff" stroke="#177d78"/>
+              <rect x="824" y="58" width="144" height="96" rx="9" fill="#e6f5f0" stroke="#177d78"/>
+            </g>
+            <path d="M 896 156 L 896 196 L 78 196 L 78 162" fill="none" stroke="#177d78" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#flow-arrow-teal)"/>
+            <text x="487" y="188" font-family="system-ui, sans-serif" font-size="12.5" font-weight="700" fill="#177d78" text-anchor="middle">Retrieve, audited every time</text>
+            <text x="487" y="216" font-family="system-ui, sans-serif" font-size="12" fill="#52646b" text-anchor="middle">Rotate and Retire pass through the same gates</text>
+          </svg>
+          <svg class="flow-mobile" viewBox="0 0 360 596" role="img" aria-labelledby="flow-m-title flow-m-desc" focusable="false">
+            <title id="flow-m-title">How a Mutandae credential flows</title>
+            <desc id="flow-m-desc">A visitor asks the throttled Mutandae API; least-privilege governor principals create a zero-permission identity in the real cloud tenants; the one-time secret is mirrored into the cluster vault; retrieval loops back, audited every time.</desc>
+            <defs>
+              <marker id="flow-arrow-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#87969a"/></marker>
+            </defs>
+            <g stroke="#87969a" stroke-width="1.5">
+              <line x1="180" y1="86" x2="180" y2="112" marker-end="url(#flow-arrow-m)"/>
+              <line x1="180" y1="194" x2="180" y2="220" marker-end="url(#flow-arrow-m)"/>
+              <line x1="180" y1="302" x2="180" y2="328" marker-end="url(#flow-arrow-m)"/>
+              <line x1="180" y1="410" x2="180" y2="436" marker-end="url(#flow-arrow-m)"/>
+            </g>
+            <g>
+              <rect x="14" y="10" width="332" height="76" rx="9" fill="#ffffff" stroke="#d0dad4"/>
+              <rect x="14" y="118" width="332" height="76" rx="9" fill="#fff0eb" stroke="#a93f2d"/>
+              <rect x="14" y="226" width="332" height="76" rx="9" fill="#ffffff" stroke="#d0dad4"/>
+              <rect x="14" y="334" width="332" height="76" rx="9" fill="#ffffff" stroke="#177d78"/>
+              <rect x="14" y="442" width="332" height="76" rx="9" fill="#e6f5f0" stroke="#177d78"/>
+            </g>
+            <g font-family="Georgia, 'Times New Roman', serif" font-size="14" fill="#17262d" text-anchor="middle">
+              <text x="180" y="40">Visitor</text>
+              <text x="180" y="148">μTandae API</text>
+              <text x="180" y="256">Governor principals</text>
+              <text x="180" y="364">Real cloud tenants</text>
+              <text x="180" y="472">μVault · KV v2</text>
+            </g>
+            <g font-family="system-ui, sans-serif" font-size="12" fill="#52646b" text-anchor="middle">
+              <text x="180" y="60">public demo user</text>
+              <text x="180" y="168">throttle · demo quota · protocol v1</text>
+              <text x="180" y="276">least privilege: create · rotate · retire</text>
+              <text x="180" y="384">AWS IAM · GCP IAM · Entra ID</text>
+              <text x="180" y="400">zero-permission identities</text>
+              <text x="180" y="492">one-time secret shown once · versioned copy</text>
+            </g>
+            <text x="180" y="558" font-family="system-ui, sans-serif" font-size="12.5" font-weight="700" fill="#177d78" text-anchor="middle">Retrieve loops back, audited every time</text>
+            <text x="180" y="578" font-family="system-ui, sans-serif" font-size="12" fill="#52646b" text-anchor="middle">Rotate and Retire pass through the same gates</text>
+          </svg>
+        </div>
+        <p class="flow-caption">Every step emits an audit event: <code>identity.discovered</code> · <code>rotation.completed</code> · <code>credential.used</code> · <code>identity.retired</code>, and never secret material.</p>
         <div class="protocol-cards">
           <article class="protocol-card">
             <h3>What it is</h3>
-            <p>A small, versioned, provider-neutral lifecycle and rotation protocol for machine identities — JSON over HTTP, media type <code>application/vnd.mutandae.v1+json</code>.</p>
-            <p>One canonical state machine (registered → active → renewing → retired), one event vocabulary (<code>identity.discovered</code>, <code>identity.registered</code>, <code>rotation.*</code>, <code>credential.delivered</code>/<code>credential.used</code>/<code>credential.revoked</code>, <code>identity.retired</code>), one audit shape — spoken identically by the Azure/Entra ID, AWS IAM, and GCP IAM adapters.</p>
+            <p>A small, versioned, provider-neutral lifecycle and rotation protocol for machine identities: JSON over HTTP, media type <code>application/vnd.mutandae.v1+json</code>.</p>
+            <p>One canonical state machine (registered → active → renewing → retired), one event vocabulary (<code>identity.discovered</code>, <code>identity.registered</code>, <code>rotation.*</code>, <code>credential.delivered</code>/<code>credential.used</code>/<code>credential.revoked</code>, <code>identity.retired</code>), one audit shape, spoken identically by the Azure/Entra ID, AWS IAM, and GCP IAM adapters.</p>
           </article>
           <article class="protocol-card">
             <h3>Why it exists</h3>
@@ -124,7 +204,7 @@
           </article>
           <article class="protocol-card">
             <h3>The value it brings</h3>
-            <p>Portability across clouds — the same lifecycle verbs over Azure, AWS, and GCP. Evidence for every change: each rotation, use, and revocation is an audited event with actor, outcome, and vault reference — never secret material.</p>
+            <p>Portability across clouds: the same lifecycle verbs over Azure, AWS, and GCP. Evidence for every change: each rotation, use, and revocation is an audited event with actor, outcome, and vault reference, and never secret material.</p>
             <p>Renewal health at a glance, and an honest open-core boundary: the protocol and frontend are public; production renewal engines stay private.</p>
           </article>
           <article class="protocol-card">
@@ -151,7 +231,7 @@ curl /api/v1/identities  # inventory</code></pre>
   <div class="modal-backdrop" id="audit-modal" hidden>
     <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="audit-modal-title">
       <header class="modal-header">
-        <p class="section-kicker">Audit trail</p>
+        <p class="modal-heading">Audit trail</p>
         <button class="modal-close" type="button" aria-label="Close audit trail">×</button>
       </header>
       <div class="modal-body" id="audit-modal-content"></div>
