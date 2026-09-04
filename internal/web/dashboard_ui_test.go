@@ -429,3 +429,34 @@ func TestProvisionResultNamesNativeVault(t *testing.T) {
 		t.Errorf("use fragment must name the provider-native vault: %s", raw)
 	}
 }
+
+// TestFlowDiagramPaintsBoxesBeforeText locks the SVG paint order: SVG has no
+// z-index, so a rect drawn after the text groups paints over its own labels
+// and the diagram becomes unreadable (observed live on the desktop variant).
+func TestFlowDiagramPaintsBoxesBeforeText(t *testing.T) {
+	body := dashboardBody(t, testHandler(t), "/")
+	for _, variant := range []string{"flow-desktop", "flow-mobile"} {
+		start := strings.Index(body, `class="`+variant+`"`)
+		if start < 0 {
+			t.Fatalf("dashboard missing the %q flow diagram", variant)
+		}
+		end := strings.Index(body[start:], "</svg>")
+		if end < 0 {
+			t.Fatalf("flow diagram %q is not terminated", variant)
+		}
+		svg := body[start : start+end]
+		firstRect := strings.Index(svg, "<rect")
+		firstText := strings.Index(svg, "<text ")
+		if firstRect < 0 || firstText < 0 {
+			t.Fatalf("flow diagram %q lost its boxes or labels", variant)
+		}
+		if firstRect > firstText {
+			t.Errorf("flow diagram %q draws rects after text: boxes would paint over their own labels", variant)
+		}
+		// The boxes must also be opaque enough to sit behind the labels, and
+		// the labels must be present at all.
+		if !strings.Contains(svg, "Visitor") || !strings.Contains(svg, "μTandae API") {
+			t.Errorf("flow diagram %q lost its stage labels", variant)
+		}
+	}
+}
