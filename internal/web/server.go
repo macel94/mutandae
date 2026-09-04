@@ -645,6 +645,13 @@ func (s *Server) apiIntegrationInvalidateSecret(w http.ResponseWriter, r *http.R
 
 func (s *Server) apiList(w http.ResponseWriter, r *http.Request) {
 	identities := s.lifecycle.List()
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include")), "retired") {
+		if lister, ok := s.lifecycle.(interface {
+			ListIncludingRetired() []protocol.MachineIdentity
+		}); ok {
+			identities = lister.ListIncludingRetired()
+		}
+	}
 	s.writeJSON(w, http.StatusOK, protocol.ListResponse{
 		APIVersion: protocol.Version,
 		Total:      len(identities),
@@ -1082,17 +1089,30 @@ func (s *Server) dashboardView() dashboardView {
 		"Mutandae · Machine identity control plane",
 		"Mutandae machine identity lifecycle control plane demo")
 	now := s.now()
-	identities := s.lifecycle.List()
+	active := s.lifecycle.List()
+	all := active
+	if lister, ok := s.lifecycle.(interface {
+		ListIncludingRetired() []protocol.MachineIdentity
+	}); ok {
+		all = lister.ListIncludingRetired()
+	}
+	retired := make([]identityView, 0, len(all))
+	for _, identity := range all {
+		if identity.State == protocol.StateRetired {
+			retired = append(retired, toIdentityView(identity, now))
+		}
+	}
 	view := dashboardView{
-		Identities: make([]identityView, 0, len(identities)),
+		Identities: make([]identityView, 0, len(active)),
+		Retired:    identityCollection{Identities: retired},
+		Total:      len(all),
 		UpdatedAt:  now.Format("15:04 MST"),
 		Chrome:     chrome,
 		LiveReal:   chrome.LiveReal,
 	}
-	for _, identity := range identities {
+	for _, identity := range active {
 		item := toIdentityView(identity, now)
 		view.Identities = append(view.Identities, item)
-		view.Total++
 		switch item.Urgency {
 		case string(protocol.UrgencyHealthy):
 			if item.RenewalHealth == string(protocol.HealthHealthy) {
@@ -1101,12 +1121,7 @@ func (s *Server) dashboardView() dashboardView {
 		case string(protocol.UrgencyExpiring):
 			view.Expiring++
 		}
-		// Retirement marks the record's health as attention for the audit
-		// trail, but retired identities are decommissioned records — they can
-		// never become an incident and the dashboard's Attention filter
-		// excludes them too. Only governance-relevant identities count here.
-		if item.Urgency != string(protocol.UrgencyRetired) &&
-			(item.RenewalHealth != string(protocol.HealthHealthy) || item.Urgency == string(protocol.UrgencyOverdue)) {
+		if item.RenewalHealth != string(protocol.HealthHealthy) || item.Urgency == string(protocol.UrgencyOverdue) {
 			view.Attention++
 		}
 	}
@@ -1267,8 +1282,13 @@ const demoPrefixWeb = "mutandae-demo-"
 // dashboardView carries the multi-provider summary plus the identity inventory.
 // The shared chrome (head, topbar, footer, audit modal) arrives through the
 // single Chrome field built by Server.chrome.
+type identityCollection struct {
+	Identities []identityView
+}
+
 type dashboardView struct {
 	Identities []identityView
+	Retired    identityCollection
 	Provision  []providerSummary
 	LiveReal   bool
 	Total      int
@@ -1320,16 +1340,7 @@ type eventsView struct {
 }
 
 func urgency(identity protocol.MachineIdentity, now time.Time) protocol.Urgency {
-	if identity.State == protocol.StateRetired {
-		return protocol.UrgencyRetired
-	}
-	if !identity.ExpiresAt.After(now) {
-		return protocol.UrgencyOverdue
-	}
-	if identity.ExpiresAt.Before(now.Add(30 * 24 * time.Hour)) {
-		return protocol.UrgencyExpiring
-	}
-	return protocol.UrgencyHealthy
+	return lifecycle.ComputeUrgency(identity, now)
 }
 
 func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityView {

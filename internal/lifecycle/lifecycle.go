@@ -29,6 +29,8 @@ type Store struct {
 	nextRun     int
 	watchCancel context.CancelFunc
 	watchDone   chan struct{}
+	auditSink   AuditSink
+	auditLogger AuditLogger
 }
 
 // Option configures optional Store collaborators at construction time.
@@ -37,6 +39,8 @@ type Option func(*storeOptions)
 // storeOptions carries the collaborators an Option may inject.
 type storeOptions struct {
 	commonVault CommonVault
+	auditSink   AuditSink
+	auditLogger AuditLogger
 }
 
 // WithCommonVault binds the cluster μVault mirror to the store. A nil vault
@@ -46,6 +50,27 @@ func WithCommonVault(vault CommonVault) Option {
 	return func(options *storeOptions) {
 		if vault != nil {
 			options.commonVault = vault
+		}
+	}
+}
+
+// WithAuditSink binds a durable lifecycle-event sink to the store. The sink is
+// best effort: a sink failure is logged, while the lifecycle operation remains
+// governed by the store's normal persistence and provider result.
+func WithAuditSink(sink AuditSink) Option {
+	return func(options *storeOptions) {
+		if sink != nil {
+			options.auditSink = sink
+		}
+	}
+}
+
+// WithAuditLogger supplies the small logger used when a lifecycle audit sink
+// cannot append an event.
+func WithAuditLogger(logger AuditLogger) Option {
+	return func(options *storeOptions) {
+		if logger != nil {
+			options.auditLogger = logger
 		}
 	}
 }
@@ -80,6 +105,8 @@ func newStore(ctx context.Context, now time.Time, adapter Adapter, repository Re
 		identities:  make(map[string]protocol.MachineIdentity),
 		events:      make(map[string][]protocol.LifecycleEvent),
 		runs:        make(map[string][]protocol.RotationRun),
+		auditSink:   opts.auditSink,
+		auditLogger: opts.auditLogger,
 	}
 	if repository != nil {
 		snapshot, err := repository.Load(ctx)
@@ -161,15 +188,35 @@ func (s *Store) addEvent(identityID string, at time.Time, eventType protocol.Eve
 		event.RunID = runID
 	}
 	s.events[identityID] = append(s.events[identityID], event)
+	if s.auditSink != nil {
+		if err := s.auditSink.Append(context.Background(), event); err != nil && s.auditLogger != nil {
+			s.auditLogger("append lifecycle audit event %s: %v", event.ID, err)
+		}
+	}
 }
 
-// List returns governed identities ordered by expiry ascending.
+// List returns active governed identities ordered by expiry ascending. Retired
+// records remain available through ListIncludingRetired and Events so their
+// audit history is not lost when they leave the active inventory.
 func (s *Store) List() []protocol.MachineIdentity {
+	return s.list(false)
+}
+
+// ListIncludingRetired returns the complete retained inventory, including
+// retired identities, ordered by expiry ascending.
+func (s *Store) ListIncludingRetired() []protocol.MachineIdentity {
+	return s.list(true)
+}
+
+func (s *Store) list(includeRetired bool) []protocol.MachineIdentity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	identities := make([]protocol.MachineIdentity, 0, len(s.identities))
 	for _, identity := range s.identities {
+		if !includeRetired && identity.State == protocol.StateRetired {
+			continue
+		}
 		identities = append(identities, identity)
 	}
 	sort.Slice(identities, func(i, j int) bool {
@@ -407,6 +454,12 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 	s.nextRun++
 	runID := fmt.Sprintf("run-%03d", s.nextRun)
 	operator := req.RequestedByOrDefault()
+	workflowActor := protocol.ActorControlPlane
+	terminalActor := protocol.ActorProviderAdapter
+	if operator == "system:sweeper" {
+		workflowActor = operator
+		terminalActor = operator
+	}
 	run := protocol.RotationRun{
 		ID: runID, IdentityID: identity.ID, Status: protocol.RotationRunning,
 		RequestedBy: operator, RequestedAt: now, StartedAt: now,
@@ -420,7 +473,7 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		"Rotation requested by "+operator, operator, protocol.OutcomeInProgress,
 		map[string]string{"reason": req.Reason}, runID)
 	s.addEvent(identity.ID, now, protocol.EventRotationStarted,
-		"Rotation dispatched to "+identity.Provider.Provider, protocol.ActorControlPlane,
+		"Rotation dispatched to "+identity.Provider.Provider, workflowActor,
 		protocol.OutcomeInProgress, nil, runID)
 
 	// The demo holds the store lock while invoking the (in-memory) provider
@@ -440,7 +493,7 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 		run.Error = adapterErr.Error()
 		s.runs[identity.ID][runIndex] = run
 		s.addEvent(identity.ID, now, protocol.EventRotationFailed,
-			"Rotation failed at the provider: "+adapterErr.Error(), protocol.ActorProviderAdapter,
+			"Rotation failed at the provider: "+adapterErr.Error(), terminalActor,
 			protocol.OutcomeFailure, nil, runID)
 		if persistErr := s.persistLocked(ctx); persistErr != nil {
 			s.mu.Unlock()
@@ -467,7 +520,7 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 	run.Evidence = identity.Credential
 	s.runs[identity.ID][runIndex] = run
 	s.addEvent(identity.ID, now, protocol.EventRotationCompleted,
-		"New credential verified against provider state", protocol.ActorProviderAdapter,
+		"New credential verified against provider state", terminalActor,
 		protocol.OutcomeSuccess,
 		map[string]string{"key_id": identity.Credential.KeyID, "fingerprint": identity.Credential.Fingerprint}, runID)
 	s.mu.Unlock()

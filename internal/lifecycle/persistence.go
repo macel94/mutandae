@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -93,8 +94,16 @@ func (s *Store) Close() error {
 			<-s.watchDone
 		}
 	}
-	if s.repository != nil {
-		return s.repository.Close()
+	var errs []error
+	if s.auditSink != nil {
+		if err := s.auditSink.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	if s.repository != nil {
+		if err := s.repository.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
