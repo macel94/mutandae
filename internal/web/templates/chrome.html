@@ -21,6 +21,13 @@
         <a href="/#protocol">Protocol</a>
         <a{{ if eq .Active "configuration" }} class="active"{{ end }} href="/configuration">Configuration</a>
         <span class="environment-chip"><span class="status-dot"></span>{{ if .LiveReal }}Live demo · real tenants{{ else }}Multi-cloud simulator{{ end }}</span>
+        {{ if .Authenticated }}
+        <span class="auth-principal" title="Signed-in principal">{{ .Principal }} · {{ .Role }}</span>
+        <form class="logout-form" method="post" action="/auth/logout">
+          <input type="hidden" name="csrf_token" value="{{ .CSRFToken }}">
+          <button class="button button-small button-secondary" type="submit">Log out</button>
+        </form>
+        {{ end }}
       </nav>
     </header>{{ end }}{{ end }}
 

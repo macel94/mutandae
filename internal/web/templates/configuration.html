@@ -43,6 +43,15 @@
           </ul>
           <p class="muted">The runtime configuration itself is read-only. The optional integration is an isolated, expiring operator session—not a deployment setting.</p>
         </article>
+        <article class="panel config-card">
+          <h2>Authentication</h2>
+          <dl class="config-list">
+            <div><dt>Mode</dt><dd>{{ .AuthMetadata.AuthMode }}</dd></div>
+            <div><dt>Roles</dt><dd>{{ range $index, $role := .AuthMetadata.Roles }}{{ if $index }}, {{ end }}{{ $role }}{{ end }}</dd></div>
+            <div><dt>API tokens configured</dt><dd>{{ if .AuthMetadata.TokensConfigured }}yes{{ else }}no{{ end }}</dd></div>
+          </dl>
+          <p class="muted">Token values, digests, client secrets, and session keys are never exposed here.</p>
+        </article>
       </section>
       {{ if .IntegrationEnabled }}
       <section class="panel config-card integration-panel" aria-labelledby="integration-title">

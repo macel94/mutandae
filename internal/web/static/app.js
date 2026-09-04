@@ -6,6 +6,27 @@
 (function () {
   "use strict";
 
+  // --- CSRF for authenticated HTMX mutations ---
+  // The cookie is deliberately readable by this first-party script; the
+  // server still requires the matching value in a request header. Bearer API
+  // calls do not use HTMX and bypass this browser-only protocol server-side.
+  function csrfCookieValue() {
+    var cookies = document.cookie.split("; ");
+    for (var i = 0; i < cookies.length; i++) {
+      if (cookies[i].indexOf("mutandae_csrf=") === 0) {
+        return cookies[i].slice("mutandae_csrf=".length);
+      }
+    }
+    return "";
+  }
+
+  document.body.addEventListener("htmx:configRequest", function (event) {
+    var token = csrfCookieValue();
+    if (token && event.detail && event.detail.headers) {
+      event.detail.headers["X-Mutandae-CSRF"] = token;
+    }
+  });
+
   // --- Inventory filtering (search box + status buttons) ---
   var searchBox = document.querySelector(".search-box input");
   var filterGroup = document.querySelector(".filter-group");

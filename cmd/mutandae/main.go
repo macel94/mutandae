@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -30,6 +31,13 @@ func main() {
 	now := time.Now
 	startedAt := now()
 	environment := envString("MUTANDAE_ENVIRONMENT", "preview")
+	authConfig, err := authConfigFromEnv()
+	if err != nil {
+		log.Fatalf("read authentication configuration: %v", err)
+	}
+	if err := config.ValidateAuthMode(environment, authConfig.Mode); err != nil {
+		log.Fatalf("validate authentication configuration: %v", err)
+	}
 	tenantID := envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo")
 	awsAccountID := envString("MUTANDAE_AWS_ACCOUNT", "123456789012")
 	awsRegion := envString("MUTANDAE_AWS_REGION", "us-east-1")
@@ -142,8 +150,14 @@ func main() {
 	handler, err := web.NewServer(web.Dependencies{
 		Lifecycle:   store,
 		Integration: integration,
+		Auth:        authConfig,
+		Metrics:     web.MetricsConfig{Enabled: true},
 		Configuration: config.Public{
-			Environment: environment,
+			Environment:      environment,
+			AuthMode:         authConfig.Mode,
+			AuthRoles:        []string{web.RoleAdmin, web.RoleOperator, web.RoleViewer},
+			TokensConfigured: strings.TrimSpace(authConfig.APIToken) != "" || strings.TrimSpace(authConfig.APITokensFile) != "",
+
 			Persistence: persistenceLabel(repository),
 			Provider:    "multi-cloud (azure-entra " + azureLabel + ", aws-iam " + awsLabel + ", gcp-iam " + gcpLabel + ")",
 			// Public, non-secret tenant scopes: the footer names the exact
@@ -158,8 +172,11 @@ func main() {
 			Clock:    now,
 			Features: provisionFeatures,
 		},
-		Clock:  now,
-		Logger: log.Default(),
+		Clock: now,
+		// The request logger emits JSON lines; disabling log.Logger's prefix
+		// keeps each emitted record valid JSON while startup logs retain the
+		// process-wide standard logger below.
+		Logger: log.New(os.Stderr, "", 0),
 		RateLimit: web.RateLimitConfig{
 			ReadRate:    envFloat("MUTANDAE_RATE_READ_PER_SEC", 10),
 			ReadBurst:   envInt("MUTANDAE_RATE_READ_BURST", 60),
@@ -206,6 +223,36 @@ func main() {
 	if err := store.Close(); err != nil {
 		log.Printf("close lifecycle store: %v", err)
 	}
+}
+
+func authConfigFromEnv() (web.AuthConfig, error) {
+	keyText := strings.TrimSpace(os.Getenv("MUTANDAE_SESSION_KEY"))
+	var sessionKey []byte
+	if keyText != "" {
+		decoded, err := hex.DecodeString(keyText)
+		if err != nil {
+			return web.AuthConfig{}, fmt.Errorf("MUTANDAE_SESSION_KEY must be hexadecimal: %w", err)
+		}
+		if len(decoded) < 16 {
+			return web.AuthConfig{}, errors.New("MUTANDAE_SESSION_KEY must contain at least 16 bytes")
+		}
+		sessionKey = decoded
+	}
+	mode := strings.ToLower(strings.TrimSpace(envString("MUTANDAE_AUTH_MODE", web.AuthModeNone)))
+	if mode == "" {
+		mode = web.AuthModeNone
+	}
+	return web.AuthConfig{
+		Mode:          mode,
+		IssuerURL:     envString("MUTANDAE_OIDC_ISSUER_URL", ""),
+		ClientID:      envString("MUTANDAE_OIDC_CLIENT_ID", ""),
+		ClientSecret:  os.Getenv("MUTANDAE_OIDC_CLIENT_SECRET"),
+		RedirectURL:   envString("MUTANDAE_OIDC_REDIRECT_URL", ""),
+		Scopes:        envString("MUTANDAE_OIDC_SCOPES", "openid profile email"),
+		APIToken:      os.Getenv("MUTANDAE_API_TOKEN"),
+		APITokensFile: envString("MUTANDAE_API_TOKENS_FILE", ""),
+		SessionKey:    sessionKey,
+	}, nil
 }
 
 func envInt(name string, fallback int) int {
