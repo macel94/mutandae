@@ -230,8 +230,10 @@ func TestDashboardSummarySeparatesExpiringAndOverdue(t *testing.T) {
 	if view.Total != 4 || view.Healthy != 1 || view.Expiring != 2 || view.Attention != 2 {
 		t.Fatalf("summary = (total=%d healthy=%d expiring=%d attention=%d), want (4, 1, 2, 2)", view.Total, view.Healthy, view.Expiring, view.Attention)
 	}
-	if len(view.Providers) != 1 || view.Providers[0].Kind != "azure-entra" || view.Providers[0].Scope != "tenant tenant-1" {
-		t.Fatalf("providers = %+v, want one azure-entra adapter scoped to tenant tenant-1", view.Providers)
+	// Provider scopes live in the shared chrome; the footer renders them from
+	// there on every page.
+	if len(view.Chrome.Providers) != 1 || view.Chrome.Providers[0].Kind != "azure-entra" || view.Chrome.Providers[0].Scope != "tenant tenant-1" {
+		t.Fatalf("providers = %+v, want one azure-entra adapter scoped to tenant tenant-1", view.Chrome.Providers)
 	}
 }
 

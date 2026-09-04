@@ -210,16 +210,18 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) configurationPage(w http.ResponseWriter, r *http.Request) {
-	view := configurationPageView{Configuration: s.configuration.Configuration(), Build: s.build}
+	view := configurationPageView{Configuration: s.configuration.Configuration()}
 	view.Provision = s.provisionableProviders()
 	if s.integration != nil {
 		view.IntegrationEnabled = true
 		view.Requirements = s.integration.Requirements()
 	}
 	// Shared chrome comes from the same builder the dashboard uses, so the
-	// topbar, footer, and environment chip are byte-identical on every page
-	// and can never drift out of sync again.
-	view.Chrome = s.chrome("configuration")
+	// head, topbar, footer, and environment chip are byte-identical on every
+	// page and can never drift out of sync again.
+	view.Chrome = s.chrome("configuration",
+		"Mutandae · Configuration",
+		"Mutandae demo: create and govern zero-permission machine identities in real Azure, AWS, and GCP tenants")
 	ensureCSRFCookie(w, r)
 	s.render(w, "configuration", view)
 }
@@ -932,11 +934,14 @@ func operatorOrDefault(r *http.Request) string {
 	return "demo-operator"
 }
 
-// chromeData is the shared page furniture rendered by the topbar, footer, and
-// audit-modal partials. Both full-page views carry it in a Chrome field, so
-// the header, tabs, environment chip, and footer come from one template fed
-// by one builder and cannot drift between pages.
+// chromeData is the shared page furniture rendered by the page-head, topbar,
+// footer, and audit-modal partials. Both full-page views carry it in a Chrome
+// field, so the head metadata, header, tabs, environment chip, and footer
+// come from one template fed by one builder and cannot drift between pages.
+// Title and Description are the only per-page parts of the shared head.
 type chromeData struct {
+	Title       string
+	Description string
 	// Active names the nav item to highlight: "overview" or "configuration".
 	Active       string
 	LiveReal     bool
@@ -948,11 +953,13 @@ type chromeData struct {
 // chrome builds the shared page furniture for one full page. The provider
 // derivation lives here so the dashboard and the configuration page render
 // byte-identical chrome from a single source.
-func (s *Server) chrome(active string) chromeData {
+func (s *Server) chrome(active, title, description string) chromeData {
 	now := s.now()
 	identities := s.lifecycle.List()
 	providers := s.providerSummaries(identities, now)
 	return chromeData{
+		Title:        title,
+		Description:  description,
 		Active:       active,
 		LiveReal:     len(s.provisionableProviders()) > 0,
 		Providers:    providers,
@@ -1015,13 +1022,18 @@ func (s *Server) providerSummaries(identities []protocol.MachineIdentity, now ti
 }
 
 func (s *Server) dashboardView() dashboardView {
+	// One chrome builder feeds every page; the dashboard mirrors the two
+	// derived values its own body needs (the table-note's demo-mode label).
+	chrome := s.chrome("overview",
+		"Mutandae · Machine identity control plane",
+		"Mutandae machine identity lifecycle control plane demo")
 	now := s.now()
 	identities := s.lifecycle.List()
 	view := dashboardView{
-		Identities:   make([]identityView, 0, len(identities)),
-		UpdatedAt:    now.Format("15:04 MST"),
-		Build:        s.build,
-		ClusterVault: s.clusterVaultEnabled(),
+		Identities: make([]identityView, 0, len(identities)),
+		UpdatedAt:  now.Format("15:04 MST"),
+		Chrome:     chrome,
+		LiveReal:   chrome.LiveReal,
 	}
 	for _, identity := range identities {
 		item := toIdentityView(identity, now)
@@ -1040,15 +1052,6 @@ func (s *Server) dashboardView() dashboardView {
 		}
 	}
 	view.Provision = s.provisionableProviders()
-	view.LiveReal = len(view.Provision) > 0
-	view.Providers = s.providerSummaries(identities, now)
-	view.Chrome = chromeData{
-		Active:       "overview",
-		LiveReal:     view.LiveReal,
-		Providers:    view.Providers,
-		ClusterVault: view.ClusterVault,
-		Build:        s.build,
-	}
 	return view
 }
 
@@ -1131,7 +1134,6 @@ type configurationPageView struct {
 	IntegrationEnabled bool
 	Requirements       protocol.AzureIntegrationRequirements
 	Provision          []providerSummary
-	Build              buildView
 	Chrome             chromeData
 }
 
@@ -1195,19 +1197,18 @@ type useResultView struct {
 const demoPrefixWeb = "mutandae-demo-"
 
 // dashboardView carries the multi-provider summary plus the identity inventory.
+// The shared chrome (head, topbar, footer, audit modal) arrives through the
+// single Chrome field built by Server.chrome.
 type dashboardView struct {
-	Identities   []identityView
-	Providers    []providerSummary
-	Provision    []providerSummary
-	LiveReal     bool
-	Total        int
-	Healthy      int
-	Expiring     int
-	Attention    int
-	UpdatedAt    string
-	Build        buildView
-	ClusterVault bool
-	Chrome       chromeData
+	Identities []identityView
+	Provision  []providerSummary
+	LiveReal   bool
+	Total      int
+	Healthy    int
+	Expiring   int
+	Attention  int
+	UpdatedAt  string
+	Chrome     chromeData
 }
 
 // providerSummary is a single provider adapter rendered in the dashboard.

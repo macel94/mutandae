@@ -470,6 +470,38 @@ func TestSharedChromeIsIdenticalAcrossPages(t *testing.T) {
 	dashboard := chromeBands(t, dashboardBody(t, handler, "/"))
 	configuration := chromeBands(t, dashboardBody(t, handler, "/configuration"))
 
+	// The head differs only in the per-page title and description: normalize
+	// both lines away and the remaining head must be byte-identical. This
+	// pins the shared page-head partial — favicons, stylesheet, and behaviour
+	// scripts can never diverge between pages again.
+	headWithoutMeta := func(head string) string {
+		var kept []string
+		for _, line := range strings.Split(head, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "<title>") || strings.HasPrefix(trimmed, `<meta name="description"`) {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		return strings.Join(kept, "\n")
+	}
+	if headWithoutMeta(dashboard.head) != headWithoutMeta(configuration.head) {
+		t.Errorf("heads diverge beyond title and description:\n dashboard:    %q\n configuration: %q", dashboard.head, configuration.head)
+	}
+	for _, script := range []string{
+		`src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"`,
+		`src="/static/app.js"`,
+		`rel="stylesheet" href="/static/app.css"`,
+	} {
+		if strings.Count(dashboard.head, script) != 1 || strings.Count(configuration.head, script) != 1 {
+			t.Errorf("both pages must load %s exactly once", script)
+		}
+	}
+	if !strings.Contains(dashboard.head, `Mutandae · Machine identity control plane`) ||
+		!strings.Contains(configuration.head, `Mutandae · Configuration`) {
+		t.Error("each page keeps its own title inside the shared head")
+	}
+
 	// The topbars differ only in which tab is highlighted: strip the active
 	// marker and the remaining chrome must be byte-identical.
 	strip := func(topbar string) string {
@@ -507,12 +539,9 @@ func TestSharedChromeIsIdenticalAcrossPages(t *testing.T) {
 		t.Errorf("footers diverge:\n dashboard:    %q\n configuration: %q", dashboard.footer, configuration.footer)
 	}
 
-	// Both pages load the same behaviour scripts; the configuration page
-	// previously shipped without htmx or app.js entirely.
-	for _, script := range []string{`src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"`, `src="/static/app.js"`} {
-		if !strings.Contains(configuration.head, script) {
-			t.Errorf("configuration page missing script %s", script)
-		}
+	// The audit modal is shared chrome: one markup source on both pages.
+	if dashboard.modal == "" || dashboard.modal != configuration.modal {
+		t.Error("the audit modal markup must be identical on both pages")
 	}
 }
 
@@ -522,6 +551,7 @@ func chromeBands(t *testing.T, body string) struct {
 	chip   string
 	footer string
 	head   string
+	modal  string
 } {
 	t.Helper()
 	topbarStart := strings.Index(body, `<header class="topbar">`)
@@ -540,6 +570,11 @@ func chromeBands(t *testing.T, body string) struct {
 	if footerStart < 0 || footerEnd < 0 {
 		t.Fatal("page missing the shared footer")
 	}
+	modalStart := strings.Index(body, `<div class="modal-backdrop" id="audit-modal"`)
+	modalEnd := strings.Index(body[modalStart:], `<div class="modal-body" id="audit-modal-content"></div>`)
+	if modalStart < 0 || modalEnd < 0 {
+		t.Fatal("page missing the shared audit modal")
+	}
 	headEnd := strings.Index(body, "</head>")
 	if headEnd < 0 {
 		t.Fatal("page missing head")
@@ -549,5 +584,6 @@ func chromeBands(t *testing.T, body string) struct {
 		chip   string
 		footer string
 		head   string
-	}{topbar, chip, body[footerStart : footerStart+footerEnd], body[:headEnd]}
+		modal  string
+	}{topbar, chip, body[footerStart : footerStart+footerEnd], body[:headEnd], body[modalStart : modalStart+modalEnd]}
 }

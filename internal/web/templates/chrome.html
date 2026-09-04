@@ -1,3 +1,15 @@
+{{ define "page-head" }}{{ with . }}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ .Description }}">
+  <title>{{ .Title }}</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" type="image/x-icon">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
+  <script defer src="/static/app.js"></script>
+{{ end }}{{ end }}
+
 {{ define "topbar" }}{{ with . }}<header class="topbar">
       <a class="brand" href="/" aria-label="Mutandae home">
         <span class="brand-symbol">μ</span><span>Mutandae</span>
