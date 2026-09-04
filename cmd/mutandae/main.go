@@ -274,7 +274,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Mutandae demo listening on http://localhost:%d (Classical Latin: moo-TAHN-dye)", port)
+		log.Printf("Mutandae demo listening on http://localhost:%d (say it like Italian mutande: moo-TAHN-deh)", port)
 		log.Printf("Provider adapters: azure-entra (tenant %s), aws-iam (account %s), gcp-iam (project %s)", tenantID, awsAccountID, gcpProjectID)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)

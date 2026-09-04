@@ -23,5 +23,5 @@
 
 - The public demo is intentionally dependency-light: Go standard library, `html/template`, HTMX, Alpine.js, and an in-memory simulator.
 - Keep the simulator honest: it must model meaningful lifecycle and audit outcomes without containing production provider credentials or pretending to be a production Azure adapter.
-- Treat Mutandae as Latin: use the Classical Latin approximation **moo-TAHN-dye** (`mūtandae`), with the final `ae` as the Latin “ai” diphthong. Do not anglicize the name.
+- Treat Mutandae as Italian: pronounce it like *mutande* — **moo-TAHN-deh** — from Latin *mūtandae*, “the things that must be changed.” Do not read the final `ae` as an English “day” sound.
 - Container and K3s manifests must run as an unprivileged user, expose health probes, avoid embedding secrets, and document any placeholder image or cluster-specific configuration.

@@ -13,9 +13,14 @@ spelling `mutandae`.
 | Product name | **Mutandae** |
 | Visual and protocol mark | **μTandae** |
 | Technical spelling | `mutandae` |
-| Pronunciation | **moo-TAHN-dye** (`mūtandae`), with final `ae` as the Latin “ai” diphthong |
+| Pronunciation | **moo-TAHN-deh** — say it like the Italian word *mutande* |
 
-Do not anglicize the final `ae` to an English “day” sound.
+Not “mutan-day.” The name is Latin *mūtandae* — **“the things that must be changed”**
+— and Italian carried that exact phrase into daily life as *mutande*: underwear.
+The things that must be changed, daily. For a credential-renewal control plane,
+we could not have asked for a more honest name.
+
+Yes. We know. The name is load-bearing.
 
 > **Mutandae — Govern what must change.**
 

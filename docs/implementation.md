@@ -10,7 +10,9 @@ This repository now contains a runnable multi-cloud vertical slice: a versioned 
 
 ## Product name and pronunciation
 
-Use the Classical Latin reading **moo-TAHN-dye** (`mūtandae`). The final `ae` is the Latin diphthong, approximated by “ai” or “eye”; do not anglicize it to an English “day” sound. The technical spelling remains ASCII `mutandae`.
+Use the Italian reading **moo-TAHN-deh** — like *mutande*, from Latin
+*mūtandae*, “the things that must be changed.” Do not read the final `ae` as an
+English “day” sound. The technical spelling remains ASCII `mutandae`.
 
 ## Choices
 

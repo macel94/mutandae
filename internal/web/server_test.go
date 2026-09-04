@@ -202,7 +202,7 @@ func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 	for _, expected := range []string{
 		"Govern what",
 		"must change.",
-		"moo-TAHN-dye",
+		"moo-TAHN-deh",
 		"Azure / Entra ID",
 		"Multi-cloud simulator",
 		"hx-post=\"/identities/payments-api/rotate\"",

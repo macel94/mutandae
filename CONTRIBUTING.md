@@ -1,6 +1,8 @@
 # Contributing to Mutandae
 
-Thank you for helping improve Mutandae (pronounced **moo-TAHN-dye**). The
+Thank you for helping improve Mutandae (pronounced **moo-TAHN-deh**, like the
+Italian word *mutande* — “the things that must be changed”; yes, that includes
+underwear, and yes, it stays). The
 project is an open-core machine-identity lifecycle control plane. Contributions
 should preserve the provider-neutral protocol, honest trust boundaries, and
 small operational surface.

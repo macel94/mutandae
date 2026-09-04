@@ -21,15 +21,28 @@ The canonical technical spelling is **`mutandae`**.
 
 ## Pronunciation
 
-Read the product name as Latin, not as an English word:
+Read the product name as the Italian word *mutande*, not as an English word:
 
-> **moo-TAHN-dye**
+> **moo-TAHN-deh**
 
-The spelling is *mūtandae* for pronunciation guidance: the first two long vowels are approximated by “moo” and “tahn,” and the final Latin diphthong *ae* is approximated by “ai” or “eye.” Do not anglicize the final *ae* to an English “day” sound. This pronunciation should be used consistently in demos, presentations, documentation, and product introductions.
+The name descends from the Latin *mūtandae* — **“the things that must be
+changed.”** Italian preserved that phrase and put it to work: *mutande* means
+underwear — literally the things that must be changed every day. A credential
+lifecycle product named after the item with the strictest rotation policy in
+existence is not an accident; it is the most honest naming decision in this
+repository.
+
+This pronunciation is used consistently in demos, presentations, documentation,
+and product introductions. Do not read the final `ae` as an English “day.”
 
 ## Meaning and inspiration
 
-The name draws on the Latin root *mutare*, associated with changing, altering, or moving. The form *mutandae* is an inflected gerundive form that can evoke “things that must be changed” or “things due for change.” That is a useful conceptual fit for credentials and identities that are due for renewal, rotation, correction, or retirement.
+The name draws on the Latin root *mutare*, associated with changing, altering, or moving. The form *mutandae* is an inflected gerundive form meaning “things that must be changed” or “things due for change.” That is a useful conceptual fit for credentials and identities that are due for renewal, rotation, correction, or retirement.
+
+Italian carried the phrase into everyday language as *mutande* — underwear, the
+everyday object with a daily rotation policy. The project treats this as a
+feature, not an embarrassment: the name documents the domain (things that must
+change) and the joke documents itself.
 
 The visual identity may also draw inspiration from:
 
@@ -57,7 +70,8 @@ The brand should not rely on a literal lock, key, shield, or storage-vault icon 
 - “moot” can mean debatable, irrelevant, or no longer actionable;
 - the additional `o` weakens the connection to *mutare*;
 - it is visually longer without adding product meaning;
-- it does not materially eliminate the pronunciation similarity to Italian *mutande*.
+- it loses the Italian reading *mutande* — “the things that must be changed,
+  daily” — which is the single best thing about this name.
 
 ## Why not μ丹田E?
 
