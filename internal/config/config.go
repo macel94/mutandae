@@ -40,6 +40,8 @@ type ProviderDescriptor struct {
 	Kind  string
 	Label string
 	Scope string
+	Allow []string
+	Deny  []string
 }
 
 // Public is immutable after construction and contains no raw environment
@@ -96,6 +98,13 @@ func (p Public) Configuration() protocol.Configuration {
 	} else {
 		features = append(features, "Process-local demo state")
 	}
+	providers := make([]protocol.ProviderDescriptor, 0, len(p.Providers))
+	for _, descriptor := range p.Providers {
+		providers = append(providers, protocol.ProviderDescriptor{
+			Kind: descriptor.Kind, Label: descriptor.Label, Scope: descriptor.Scope,
+			Allow: append([]string(nil), descriptor.Allow...), Deny: append([]string(nil), descriptor.Deny...),
+		})
+	}
 	return protocol.Configuration{
 		Service:         "mutandae-control-plane",
 		ProtocolVersion: protocol.Version,
@@ -105,6 +114,7 @@ func (p Public) Configuration() protocol.Configuration {
 		Persistence:     persistence,
 		ReadOnly:        true,
 		Features:        features,
+		Providers:       providers,
 		UpdatedAt:       now,
 	}
 }

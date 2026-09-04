@@ -13,4 +13,11 @@ import "errors"
 // AccessDenied from a governor principal that was never granted vault
 // permissions: the capability does not exist in practice, so delivery skips
 // silently and credential reads fall back to the cluster μVault copy.
-var ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
+var (
+	ErrVaultUnsupported = errors.New("vault delivery is not configured for this provider adapter")
+	// ErrForbidden means the requested provider identity is outside the
+	// adapter's configured governance scope. It is safe to expose as the
+	// protocol's 403-style forbidden error; callers must not retry it by
+	// changing provider state.
+	ErrForbidden = errors.New("protocol: operation is forbidden")
+)

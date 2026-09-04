@@ -197,6 +197,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /partials/identities", s.identityList)
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
+	mux.HandleFunc("POST /identities/{id}/rotate/preview", s.previewRotation)
 	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
 	mux.HandleFunc("DELETE /identities/{id}", s.deleteIdentity)
 	mux.HandleFunc("POST /identities/{id}/use", s.use)
@@ -285,6 +286,10 @@ func (s *Server) identityEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
+	if isDryRunForm(r) {
+		s.previewRotation(w, r)
+		return
+	}
 	req := protocol.RotateRequest{
 		ID:          r.PathValue("id"),
 		RequestedBy: operatorOrDefault(r),
@@ -349,6 +354,10 @@ func (s *Server) apiDeleteIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
+	if isDryRunForm(r) {
+		s.previewRetirement(w, r)
+		return
+	}
 	req := protocol.RetireRequest{
 		ID:          r.PathValue("id"),
 		RequestedBy: operatorOrDefault(r),
@@ -730,7 +739,7 @@ func (s *Server) apiProvision(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.provisionIdentity(r, req.Provider, req.Purpose)
 	if err != nil {
-		s.writeJSON(w, http.StatusConflict, protocol.Failure(lifecycle.NewError(err)))
+		s.writeJSON(w, s.mutationErrorStatus(err), protocol.Failure(lifecycle.NewError(err)))
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, resp)
@@ -823,10 +832,17 @@ func (s *Server) activeDemo(provider string) []protocol.MachineIdentity {
 }
 
 func (s *Server) apiRotate(w http.ResponseWriter, r *http.Request) {
-	req := protocol.RotateRequest{
-		ID:          r.PathValue("id"),
-		RequestedBy: operatorOrDefault(r),
-		Reason:      "protocol api",
+	var req protocol.RotateRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+			return
+		}
+	}
+	req.ID = r.PathValue("id")
+	req.RequestedBy = operatorOrDefault(r)
+	if req.Reason == "" {
+		req.Reason = "protocol api"
 	}
 	resp, err := s.lifecycle.Rotate(r.Context(), req, s.now())
 	if err != nil {
@@ -839,7 +855,7 @@ func (s *Server) apiRotate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiRetire(w http.ResponseWriter, r *http.Request) {
 	var body protocol.RetireRequest
 	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := decodeJSONBody(w, r, &body); err != nil {
 			s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
 			return
 		}
@@ -858,10 +874,14 @@ func (s *Server) apiRetire(w http.ResponseWriter, r *http.Request) {
 // unknown identities are 404 like every other read, everything else stays a
 // 409 conflict so callers can retry a legitimately blocked transition.
 func (s *Server) mutationErrorStatus(err error) int {
-	if errors.Is(err, lifecycle.ErrNotFound) {
+	switch {
+	case errors.Is(err, lifecycle.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, lifecycle.ErrForbidden):
+		return http.StatusForbidden
+	default:
+		return http.StatusConflict
 	}
-	return http.StatusConflict
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -1010,8 +1030,11 @@ func ptr[T any](value T) *T { return &value }
 // lifecycle errors onto appropriate HTTP status codes.
 func (s *Server) writeError(w http.ResponseWriter, err error, defaultStatus int) {
 	status := defaultStatus
-	if errors.Is(err, lifecycle.ErrNotFound) {
+	switch {
+	case errors.Is(err, lifecycle.ErrNotFound):
 		status = http.StatusNotFound
+	case errors.Is(err, lifecycle.ErrForbidden):
+		status = http.StatusForbidden
 	}
 	http.Error(w, err.Error(), status)
 }

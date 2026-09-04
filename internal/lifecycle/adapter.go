@@ -27,6 +27,7 @@ var (
 	ErrProviderFailure    = errors.New("provider adapter failed")
 	ErrConfirmationNeeded = errors.New("retirement requires explicit confirmation")
 	ErrConformance        = protocol.ErrConformance
+	ErrForbidden          = protocol.ErrForbidden
 )
 
 // Adapter is the provider-aware execution boundary the control plane consumes.
@@ -44,6 +45,23 @@ type Adapter interface {
 	// Retire decommissions the identity in the provider and returns the
 	// provider-observed (retired) identity.
 	Retire(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error)
+}
+
+// Planner is the optional read-only planning boundary. Implementations must
+// not mutate provider or control-plane state while constructing a plan. The
+// returned operations are provider-neutral protocol evidence, not commands.
+type Planner interface {
+	PlanRotate(ctx context.Context, id string) ([]protocol.PlannedOperation, error)
+	PlanRetire(ctx context.Context, id string) ([]protocol.PlannedOperation, error)
+}
+
+// IdentityPlanner is an optional richer form used by composites whose
+// lifecycle IDs alone do not identify a provider. Planner remains the public
+// contract; this form lets a multi-provider adapter route without discovery or
+// mutation during a dry run.
+type IdentityPlanner interface {
+	PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error)
+	PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error)
 }
 
 // Provisioner is the optional provisioning capability of an Adapter: it
@@ -108,6 +126,8 @@ func ErrorCode(err error) protocol.ErrorCode {
 		return protocol.ErrCodeRotationInProgress
 	case errors.Is(err, ErrProviderFailure):
 		return protocol.ErrCodeProviderFailure
+	case errors.Is(err, ErrForbidden):
+		return protocol.ErrCodeForbidden
 	case errors.Is(err, ErrConfirmationNeeded):
 		return protocol.ErrCodeConflict
 	case errors.Is(err, ErrConformance):

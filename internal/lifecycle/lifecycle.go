@@ -239,7 +239,7 @@ func (s *Store) Provision(ctx context.Context, req protocol.ProvisionRequest, no
 
 	resp, err := prov.Create(ctx, provider, req.Purpose)
 	if err != nil {
-		return protocol.ProvisionResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
+		return protocol.ProvisionResponse{}, providerOperationError(err)
 	}
 	if resp.Identity.Name == "" {
 		return protocol.ProvisionResponse{}, fmt.Errorf("%w: %s adapter returned no identity", ErrProviderFailure, provider)
@@ -379,10 +379,76 @@ func registerRequestConforms(req protocol.RegisterRequest) error {
 	return nil
 }
 
+// plan builds a provider-neutral dry-run plan. Provider planners receive the
+// full governed identity when the adapter supports IdentityPlanner, which is
+// important for composites where a lifecycle id alone does not identify the
+// cloud. Older adapters fall back to a store-level plan derived from the known
+// credential state.
+func (s *Store) plan(ctx context.Context, identity protocol.MachineIdentity, rotate bool) (protocol.Plan, error) {
+	var (
+		operations []protocol.PlannedOperation
+		err        error
+	)
+	if planner, ok := s.adapter.(IdentityPlanner); ok {
+		if rotate {
+			operations, err = planner.PlanRotateIdentity(ctx, identity)
+		} else {
+			operations, err = planner.PlanRetireIdentity(ctx, identity)
+		}
+	} else if planner, ok := s.adapter.(Planner); ok {
+		id := identity.Provider.ProviderID
+		if strings.TrimSpace(id) == "" {
+			id = identity.Name
+		}
+		if rotate {
+			operations, err = planner.PlanRotate(ctx, id)
+		} else {
+			operations, err = planner.PlanRetire(ctx, id)
+		}
+	} else {
+		name := identity.Name
+		if rotate {
+			operations = []protocol.PlannedOperation{
+				{Op: "lifecycle.create_credential", Identity: name, Detail: "Create a replacement credential without applying provider changes.", Reversible: true},
+				{Op: "lifecycle.verify_credential", Identity: name, Detail: "Verify the replacement credential before it becomes current.", Reversible: true},
+				{Op: "lifecycle.revoke_previous_credential", Identity: name, Detail: "Revoke the previous credential after successful verification.", Destructive: true},
+			}
+		} else {
+			operations = []protocol.PlannedOperation{
+				{Op: "lifecycle.revoke_credential", Identity: name, Detail: "Revoke the governed credential without applying provider changes.", Destructive: true},
+				{Op: "lifecycle.mark_retired", Identity: name, Detail: "Mark the identity retired after provider decommissioning succeeds.", Reversible: false, Destructive: true},
+			}
+		}
+	}
+	if err != nil {
+		return protocol.Plan{}, providerOperationError(err)
+	}
+	plan := protocol.Plan{
+		DryRun:      true,
+		Operations:  operations,
+		ExpiresHint: "Re-plan immediately before applying; provider state may change.",
+	}
+	if err := protocol.ValidatePlan(&plan); err != nil {
+		return protocol.Plan{}, fmt.Errorf("%w: planner returned an invalid plan: %v", ErrConformance, err)
+	}
+	return plan, nil
+}
+
+func providerOperationError(err error) error {
+	if errors.Is(err, ErrForbidden) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrProviderFailure, err)
+}
+
 // Rotate starts and completes a renewal/rotation through the provider adapter,
 // emitting a correlated RotationRun and auditing events. On adapter failure the
 // identity returns to active with attention health so a retry stays possible.
+// A dry run exits before allocating a run or invoking any mutating method.
 func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error) {
+	if err := protocol.ValidateRotateRequest(&req); err != nil {
+		return protocol.RotateResponse{}, err
+	}
 	s.mu.Lock()
 	now = now.UTC()
 
@@ -402,6 +468,14 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 	if !protocol.CanTransition(identity.State, protocol.StateRenewing) {
 		s.mu.Unlock()
 		return protocol.RotateResponse{}, fmt.Errorf("%w: %s -> renewing", ErrInvalidTransition, identity.State)
+	}
+	if req.DryRun {
+		s.mu.Unlock()
+		plan, err := s.plan(ctx, identity, true)
+		if err != nil {
+			return protocol.RotateResponse{}, err
+		}
+		return protocol.RotateResponse{APIVersion: protocol.Version, Identity: identity, Plan: &plan}, nil
 	}
 
 	s.nextRun++
@@ -447,7 +521,7 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 			return protocol.RotateResponse{}, persistErr
 		}
 		s.mu.Unlock()
-		return protocol.RotateResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
+		return protocol.RotateResponse{}, providerOperationError(adapterErr)
 	}
 
 	// Governance is authoritative for expiry; the provider supplies evidence.
@@ -512,7 +586,10 @@ func (s *Store) Rotate(ctx context.Context, req protocol.RotateRequest, now time
 // requiring an explicit confirmation. The provider adapter is then asked to
 // disable the registration.
 func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error) {
-	if !req.Confirm {
+	if err := protocol.ValidateRetireRequest(&req); err != nil {
+		return protocol.RetireResponse{}, err
+	}
+	if !req.DryRun && !req.Confirm {
 		return protocol.RetireResponse{}, ErrConfirmationNeeded
 	}
 	s.mu.Lock()
@@ -531,12 +608,20 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 		s.mu.Unlock()
 		return protocol.RetireResponse{}, fmt.Errorf("%w: %s -> retired", ErrInvalidTransition, identity.State)
 	}
+	if req.DryRun {
+		s.mu.Unlock()
+		plan, err := s.plan(ctx, identity, false)
+		if err != nil {
+			return protocol.RetireResponse{}, err
+		}
+		return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity, Plan: &plan}, nil
+	}
 
 	adapter := s.adapter
 	providerView, adapterErr := adapter.Retire(ctx, identity)
 	if adapterErr != nil {
 		s.mu.Unlock()
-		return protocol.RetireResponse{}, fmt.Errorf("%w: %v", ErrProviderFailure, adapterErr)
+		return protocol.RetireResponse{}, providerOperationError(adapterErr)
 	}
 
 	operator := req.RequestedByOrDefault()

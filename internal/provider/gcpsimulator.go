@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,6 +51,7 @@ type GCPSimulator struct {
 	projectID string
 	region    string
 	now       time.Time
+	scope     Scope
 	mu        sync.Mutex
 	accounts  map[string]serviceAccount // keyed by service account unique id
 	seq       int                       // key sequence counter
@@ -59,16 +61,24 @@ type GCPSimulator struct {
 // project and region at time now. now pins the simulated provider clock so the
 // demo and its tests stay deterministic. Construction has no failure mode
 // beyond configuration, which main wiring validates.
-func NewGCPSimulator(projectID string, region string, now time.Time) *GCPSimulator {
+func NewGCPSimulator(projectID string, region string, now time.Time, scopes ...Scope) *GCPSimulator {
+	scope := simulatorConstructorScope(scopes)
 	now = now.UTC()
 	s := &GCPSimulator{
 		projectID: projectID,
 		region:    region,
 		now:       now,
+		scope:     scope,
 		accounts:  make(map[string]serviceAccount),
 	}
 	s.seed()
 	return s
+}
+
+// NewGCPSimulatorWithScope is the explicit safe constructor for callers that
+// want the simulator's zero Scope to resolve to the demo namespace.
+func NewGCPSimulatorWithScope(projectID, region string, now time.Time, scope Scope) *GCPSimulator {
+	return NewGCPSimulator(projectID, region, now, scope)
 }
 
 // uniqueID returns a realistic Google Cloud service account unique id (a
@@ -99,14 +109,19 @@ func (s *GCPSimulator) seed() {
 		{"ml-training-runtime", "staging", "Data Engineering", "ML training", "Provisions model training runtimes", "high", 90, protocol.HealthHealthy, 18 * 24 * time.Hour, 72 * 24 * time.Hour},
 		{"catalog-replication", "production", "Commerce Infrastructure", "Catalog sync", "Replicates catalog data across zones", "medium", 90, protocol.HealthHealthy, 75 * 24 * time.Hour, 15 * 24 * time.Hour},
 	}
+	demoSeed := isDemoScope(s.scope)
 	for i, item := range seed {
 		uid := s.uniqueID(i + 1)
-		email := s.email(item.name)
-		keyID := fmt.Sprintf("%s-service-key-%d", item.name, s.seq)
+		name := item.name
+		if demoSeed {
+			name = demoPrefix + name
+		}
+		email := s.email(name)
+		keyID := fmt.Sprintf("%s-service-key-%d", name, s.seq)
 		s.seq++
 		s.accounts[uid] = serviceAccount{
 			uniqueID:    uid,
-			name:        item.name,
+			name:        name,
 			email:       email,
 			environment: item.env,
 			team:        item.team,
@@ -132,6 +147,9 @@ func (s *GCPSimulator) seed() {
 // Kind returns the stable provider identifier.
 func (s *GCPSimulator) Kind() string { return gcpKind }
 
+// Scope returns the active non-secret governance scope.
+func (s *GCPSimulator) Scope() Scope { return s.scope }
+
 // Discover returns the provider's current view of machine identities (the
 // enabled service accounts in the simulated project). Control-plane governance
 // IDs are left for the control plane to assign; disabled/retired service
@@ -142,8 +160,8 @@ func (s *GCPSimulator) Discover(_ context.Context) ([]protocol.MachineIdentity, 
 
 	identities := make([]protocol.MachineIdentity, 0, len(s.accounts))
 	for _, acct := range s.accounts {
-		if acct.disabled {
-			continue // retired/disabled service accounts are not rediscovered
+		if acct.disabled || !s.scope.Match(acct.email) {
+			continue // retired/disabled or out-of-scope accounts are not discovered
 		}
 		identities = append(identities, s.toIdentity(acct))
 	}
@@ -198,18 +216,38 @@ func (s *GCPSimulator) accountByProviderID(identity protocol.MachineIdentity) (s
 	return acct, nil
 }
 
+func (s *GCPSimulator) accountForPlan(id string) (serviceAccount, bool) {
+	for _, acct := range s.accounts {
+		if acct.uniqueID == id || acct.name == id || acct.email == id {
+			return acct, true
+		}
+	}
+	return serviceAccount{}, false
+}
+
 // Rotate performs a simulated rotation of the service account's user-managed
 // key and returns provider-observed evidence (a new key id and fingerprint, plus
 // the newly scheduled expiry). The control plane applies its own governed
 // expiry. The demo realistically tracks only one active US-downloadable
 // user-managed key per service account.
 func (s *GCPSimulator) Rotate(_ context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = strings.TrimSpace(identity.Provider.ProviderID)
+	}
+	if !s.scope.Match(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, name, s.scope)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	acct, err := s.accountByProviderID(identity)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
+	}
+	if !s.scope.Match(acct.email) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, acct.email, s.scope)
 	}
 	if acct.disabled {
 		return protocol.MachineIdentity{}, fmt.Errorf("%s: %s is disabled/retired and cannot rotate", gcpKind, acct.name)
@@ -233,6 +271,14 @@ func (s *GCPSimulator) Rotate(_ context.Context, identity protocol.MachineIdenti
 // Retire disables the service account in the simulated project. Disabled
 // accounts are not rediscovered.
 func (s *GCPSimulator) Retire(_ context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = strings.TrimSpace(identity.Provider.ProviderID)
+	}
+	if !s.scope.Match(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, name, s.scope)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -240,8 +286,68 @@ func (s *GCPSimulator) Retire(_ context.Context, identity protocol.MachineIdenti
 	if err != nil {
 		return protocol.MachineIdentity{}, err
 	}
+	if !s.scope.Match(acct.email) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, acct.email, s.scope)
+	}
 	acct.disabled = true
 	s.accounts[acct.uniqueID] = acct
 	identity = s.toIdentity(acct)
 	return identity, nil
+}
+
+// PlanRotate returns the simulator's read-only service-account key sequence.
+func (s *GCPSimulator) PlanRotate(_ context.Context, id string) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan rotate requires an identity id", gcpKind)
+	}
+	s.mu.Lock()
+	acct, ok := s.accountForPlan(name)
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown service account %q", gcpKind, name)
+	}
+	if !s.scope.Match(acct.email) {
+		return nil, forbiddenScopeError(gcpKind, acct.email, s.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("gcp.create_service_account_key", acct.email, "Create a replacement user-managed service-account key.", true, false),
+		planned("gcp.delete_key", acct.email, "Delete the rotated-out user-managed key after the replacement is available.", false, true),
+	}, nil
+}
+
+// PlanRetire returns the simulator's read-only credential decommission step.
+func (s *GCPSimulator) PlanRetire(_ context.Context, id string) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan retire requires an identity id", gcpKind)
+	}
+	s.mu.Lock()
+	acct, ok := s.accountForPlan(name)
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown service account %q", gcpKind, name)
+	}
+	if !s.scope.Match(acct.email) {
+		return nil, forbiddenScopeError(gcpKind, acct.email, s.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("gcp.delete_key", acct.email, "Delete every user-managed key so the service account has no downloadable credential.", false, true),
+	}, nil
+}
+
+func (s *GCPSimulator) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	id := identity.Provider.ProviderID
+	if id == "" {
+		id = identity.Name
+	}
+	return s.PlanRotate(ctx, id)
+}
+
+func (s *GCPSimulator) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	id := identity.Provider.ProviderID
+	if id == "" {
+		id = identity.Name
+	}
+	return s.PlanRetire(ctx, id)
 }

@@ -1,0 +1,28 @@
+{{ define "preview-result" }}
+<div class="activity-content preview-result">
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Dry-run plan · no changes applied</p>
+      <h2 id="audit-modal-title">{{ .Identity.Name }}</h2>
+      <p class="muted">{{ .Identity.Provider }} · this preview is advisory</p>
+    </div>
+    <span class="badge badge-progress"><span class="badge-dot"></span>Preview</span>
+  </div>
+  <p class="muted modal-note">The provider was not called, lifecycle state was not changed, and no audit events were emitted. Re-plan immediately before confirming because provider state can change.</p>
+  <ol class="preview-operations">
+    {{ range .Plan.Operations }}
+    <li class="preview-operation">
+      <div><code>{{ .Op }}</code><span class="preview-flags">{{ if .Reversible }}reversible{{ end }}{{ if .Destructive }} destructive{{ end }}</span></div>
+      <p>{{ .Detail }}</p>
+    </li>
+    {{ else }}
+    <li class="preview-operation"><p>No provider operations are required.</p></li>
+    {{ end }}
+  </ol>
+  <p class="muted preview-expiry">{{ .Plan.ExpiresHint }}</p>
+  <form method="post" action="/identities/{{ .Identity.ID }}/{{ .Action }}" hx-post="/identities/{{ .Identity.ID }}/{{ .Action }}" hx-target="#identity-list" hx-swap="outerHTML">
+    {{ if eq .Action "retire" }}<input type="hidden" name="confirm" value="1">{{ end }}
+    <button class="button button-danger" type="submit">Confirm and {{ .Action }}</button>
+  </form>
+</div>
+{{ end }}

@@ -1,10 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mutandae.dev/schema/mutandae.v1.json",
   "title": "μTandae Protocol v1",
   "description": "JSON Schema for μTandae Protocol v1 wire objects.",
   "anyOf": [
     {
       "$ref": "#/$defs/ListResponse"
+    },
+    {
+      "$ref": "#/$defs/ConfigurationResponse"
     },
     {
       "$ref": "#/$defs/InspectResponse"
@@ -104,6 +108,18 @@
         "provider",
         "provider_id"
       ]
+    },
+    "ProviderDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "scope": {"type": "string", "minLength": 1},
+        "allow": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "deny": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "required": ["kind", "label", "scope"]
     },
     "Ownership": {
       "type": "object",
@@ -309,6 +325,28 @@
         "at"
       ]
     },
+    "PlannedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {"type": "string", "minLength": 1},
+        "identity": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1},
+        "reversible": {"type": "boolean"},
+        "destructive": {"type": "boolean"}
+      },
+      "required": ["op", "identity", "detail", "reversible", "destructive"]
+    },
+    "Plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {"const": true},
+        "operations": {"type": "array", "items": {"$ref": "#/$defs/PlannedOperation"}},
+        "expires_hint": {"type": "string", "minLength": 1}
+      },
+      "required": ["dry_run", "operations", "expires_hint"]
+    },
     "RotationRun": {
       "type": "object",
       "additionalProperties": false,
@@ -413,7 +451,8 @@
         "unsupported_version",
         "conflict",
         "internal",
-        "unimplemented"
+        "unimplemented",
+        "forbidden"
       ]
     },
     "EventType": {
@@ -433,6 +472,9 @@
         "rotation.completed",
         "rotation.failed",
         "rotation.rolled_back",
+        "credential.delivered",
+        "credential.used",
+        "credential.revoked",
         "identity.retired",
         "identity.revoked",
         "identity.resurrected",
@@ -644,6 +686,33 @@
         "message"
       ]
     },
+    "Configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "service": {"type": "string"},
+        "protocol_version": {"type": "string"},
+        "media_type": {"type": "string"},
+        "environment": {"type": "string"},
+        "provider": {"type": "string"},
+        "persistence": {"type": "string"},
+        "read_only": {"type": "boolean"},
+        "features": {"type": "array", "items": {"type": "string"}},
+        "providers": {"type": "array", "items": {"$ref": "#/$defs/ProviderDescriptor"}},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["service", "protocol_version", "media_type", "environment", "provider", "persistence", "read_only", "features", "updated_at"]
+    },
+    "ConfigurationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {"const": "v1"},
+        "configuration": {"$ref": "#/$defs/Configuration"},
+        "error": {"$ref": "#/$defs/Error"}
+      },
+      "required": ["api_version", "configuration"]
+    },
     "ListRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -840,6 +909,10 @@
         },
         "metadata": {
           "$ref": "#/$defs/Metadata"
+        },
+        "dry_run": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -865,14 +938,20 @@
             "$ref": "#/$defs/LifecycleEvent"
           }
         },
+        "plan": {
+          "$ref": "#/$defs/Plan"
+        },
         "error": {
           "$ref": "#/$defs/Error"
         }
       },
       "required": [
         "api_version",
-        "identity",
-        "rotation"
+        "identity"
+      ],
+      "anyOf": [
+        {"required": ["rotation"]},
+        {"required": ["plan"]}
       ]
     },
     "RetireRequest": {
@@ -890,6 +969,10 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "dry_run": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -912,6 +995,9 @@
           "items": {
             "$ref": "#/$defs/LifecycleEvent"
           }
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan"
         },
         "error": {
           "$ref": "#/$defs/Error"

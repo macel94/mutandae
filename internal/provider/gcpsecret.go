@@ -48,7 +48,7 @@ func (a *GCPAdapter) StoreSecret(ctx context.Context, identity protocol.MachineI
 	if err := ctx.Err(); err != nil {
 		return protocol.VaultReference{}, err
 	}
-	name, err := gcpVaultSecretName(identity)
+	name, err := a.gcpVaultSecretName(identity)
 	if err != nil {
 		return protocol.VaultReference{}, err
 	}
@@ -113,7 +113,7 @@ func (a *GCPAdapter) ReadSecret(ctx context.Context, identity protocol.MachineId
 	if err := ctx.Err(); err != nil {
 		return "", protocol.VaultReference{}, err
 	}
-	name, err := gcpVaultSecretName(identity)
+	name, err := a.gcpVaultSecretName(identity)
 	if err != nil {
 		return "", protocol.VaultReference{}, err
 	}
@@ -158,7 +158,7 @@ func (a *GCPAdapter) RevokeSecret(ctx context.Context, identity protocol.Machine
 	if err := ctx.Err(); err != nil {
 		return protocol.VaultReference{}, err
 	}
-	name, err := gcpVaultSecretName(identity)
+	name, err := a.gcpVaultSecretName(identity)
 	if err != nil {
 		return protocol.VaultReference{}, err
 	}
@@ -194,20 +194,31 @@ func (a *GCPAdapter) RevokeSecret(ctx context.Context, identity protocol.Machine
 	}, nil
 }
 
-func gcpVaultSecretName(identity protocol.MachineIdentity) (string, error) {
-	if !isDemoName(identity.Name) {
-		return "", fmt.Errorf("gcp: refusing vault access outside the %s* namespace", demoPrefix)
+func (a *GCPAdapter) gcpVaultSecretName(identity protocol.MachineIdentity) (string, error) {
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = strings.TrimSpace(identity.Provider.ProviderID)
+	}
+	if name == "" {
+		return "", forbiddenScopeError(gcpKind, name, a.scope)
+	}
+	vaultScope := a.scope
+	if !a.scopeConfigured {
+		vaultScope = DemoScope()
+	}
+	if !vaultScope.Match(name) {
+		return "", forbiddenScopeError(gcpKind, name, vaultScope)
 	}
 	// GCP identity names are service-account emails ("name@project.iam.
 	// gserviceaccount.com"), but Secret Manager secret ids only allow
 	// [a-zA-Z0-9_-]. Sanitize deterministically — the same identity always
 	// maps to the same secret, keeping rotations under one auditable secret —
 	// instead of refusing delivery for every real provisioned identity.
-	name := gcpSanitizeSecretID(identity.Name)
-	if name == "" {
+	secretName := gcpSanitizeSecretID(name)
+	if secretName == "" {
 		return "", errors.New("gcp: demo identity name sanitizes to an empty Secret Manager secret id")
 	}
-	return name, nil
+	return secretName, nil
 }
 
 // gcpSanitizeSecretID maps a wire-provided name onto a Secret Manager secret

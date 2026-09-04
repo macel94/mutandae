@@ -43,6 +43,18 @@ func main() {
 	awsRegion := envString("MUTANDAE_AWS_REGION", "us-east-1")
 	gcpProjectID := envString("MUTANDAE_GCP_PROJECT", "mutandae-demo")
 	gcpRegion := envString("MUTANDAE_GCP_REGION", "us-central1")
+	azureScope, err := configuredScope("MUTANDAE_AZURE_SCOPE")
+	if err != nil {
+		log.Fatalf("parse Azure scope: %v", err)
+	}
+	awsScope, err := configuredScope("MUTANDAE_AWS_SCOPE")
+	if err != nil {
+		log.Fatalf("parse AWS scope: %v", err)
+	}
+	gcpScope, err := configuredScope("MUTANDAE_GCP_SCOPE")
+	if err != nil {
+		log.Fatalf("parse GCP scope: %v", err)
+	}
 
 	// Real adapters are wired at the composition root when credential
 	// environment variables are present. In the live environment a missing
@@ -165,9 +177,9 @@ func main() {
 			// governs. Identifiers of this kind are not credentials; they
 			// already ride in tokens and ARNs.
 			Providers: []config.ProviderDescriptor{
-				{Kind: "azure-entra", Label: "Azure / Entra ID", Scope: "tenant " + azureScopeTenantID(tenantID)},
-				{Kind: "aws-iam", Label: "AWS IAM", Scope: "account " + envString("AWS_ACCOUNT_ID", awsAccountID)},
-				{Kind: "gcp-iam", Label: "GCP IAM", Scope: "project " + envString("GCP_PROJECT_ID", gcpProjectID)},
+				{Kind: "azure-entra", Label: "Azure / Entra ID", Scope: scopeDescriptor("tenant "+azureScopeTenantID(tenantID), azureScope), Allow: azureScope.Allow, Deny: azureScope.Deny},
+				{Kind: "aws-iam", Label: "AWS IAM", Scope: scopeDescriptor("account "+envString("AWS_ACCOUNT_ID", awsAccountID), awsScope), Allow: awsScope.Allow, Deny: awsScope.Deny},
+				{Kind: "gcp-iam", Label: "GCP IAM", Scope: scopeDescriptor("project "+envString("GCP_PROJECT_ID", gcpProjectID), gcpScope), Allow: gcpScope.Allow, Deny: gcpScope.Deny},
 			},
 			Clock:    now,
 			Features: provisionFeatures,
@@ -301,7 +313,15 @@ func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion stri
 		if isLive() {
 			return nil, "", false, errors.New("AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are required in the live environment")
 		}
-		return provider.NewAWSSimulator(accountID, envString("AWS_REGION", fallbackRegion), now()), "simulated", false, nil
+		scope, err := configuredScope("MUTANDAE_AWS_SCOPE")
+		if err != nil {
+			return nil, "", false, err
+		}
+		return provider.NewAWSSimulator(accountID, envString("AWS_REGION", fallbackRegion), now(), scope), "simulated", false, nil
+	}
+	scope, err := configuredScope("MUTANDAE_AWS_SCOPE")
+	if err != nil {
+		return nil, "", false, err
 	}
 	adapter, err := provider.NewAWSAdapter(provider.AWSAdapterConfig{
 		AccountID:      accountID,
@@ -310,7 +330,7 @@ func wireAWSAdapter(now func() time.Time, fallbackAccountID, fallbackRegion stri
 		SecretKey:      secretKey,
 		SessionToken:   os.Getenv("AWS_SESSION_TOKEN"),
 		Now:            now,
-		DemoOnly:       true, // live demo governs only mutandae-demo-* identities
+		Scope:          scope,
 		SecretsManager: vaultEnabled,
 	})
 	if err != nil {
@@ -332,14 +352,22 @@ func wireGCPAdapter(now func() time.Time, fallbackProjectID, fallbackRegion stri
 		if isLive() {
 			return nil, "", false, errors.New("GCP_SERVICE_ACCOUNT_KEY_JSON / GCP_SERVICE_ACCOUNT_KEY_FILE are required in the live environment")
 		}
-		return provider.NewGCPSimulator(projectID, envString("GCP_REGION", fallbackRegion), now()), "simulated", false, nil
+		scope, err := configuredScope("MUTANDAE_GCP_SCOPE")
+		if err != nil {
+			return nil, "", false, err
+		}
+		return provider.NewGCPSimulator(projectID, envString("GCP_REGION", fallbackRegion), now(), scope), "simulated", false, nil
+	}
+	scope, err := configuredScope("MUTANDAE_GCP_SCOPE")
+	if err != nil {
+		return nil, "", false, err
 	}
 	adapter, err := provider.NewGCPAdapter(provider.GCPAdapterConfig{
 		ProjectID:     projectID,
 		Region:        envString("GCP_REGION", fallbackRegion),
 		KeyJSON:       keyJSON,
 		Now:           now,
-		DemoOnly:      true, // live demo governs only mutandae-demo-* identities
+		Scope:         scope,
 		SecretManager: vaultEnabled,
 	})
 	if err != nil {
@@ -360,13 +388,22 @@ func wireAzureAdapter(now func() time.Time, vaultURL, vaultPrefix string, vaultE
 		if isLive() {
 			return nil, "", false, errors.New("AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET are required in the live environment")
 		}
-		return provider.NewSimulator(envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo"), now()), "simulated", false, nil
+		scope, err := configuredScope("MUTANDAE_AZURE_SCOPE")
+		if err != nil {
+			return nil, "", false, err
+		}
+		return provider.NewSimulator(envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo"), now(), scope), "simulated", false, nil
+	}
+	scope, err := configuredScope("MUTANDAE_AZURE_SCOPE")
+	if err != nil {
+		return nil, "", false, err
 	}
 	cfg := provider.AzureCloudAdapterConfig{
 		TenantID:          tenantID,
 		ClientID:          clientID,
 		ClientSecret:      clientSecret,
 		Now:               now,
+		Scope:             scope,
 		VaultSecretPrefix: vaultPrefix,
 	}
 	if vaultEnabled {
@@ -410,6 +447,22 @@ func wireCommonVaultStore(now func() time.Time) (lifecycle.CommonVault, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func configuredScope(environmentName string) (provider.Scope, error) {
+	value := strings.TrimSpace(os.Getenv(environmentName))
+	if value == "" {
+		return provider.DemoScope(), nil
+	}
+	return provider.ParseScope(value)
+}
+
+func scopeDescriptor(prefix string, scope provider.Scope) string {
+	parts := []string{prefix, "allow " + strings.Join(scope.Allow, ", ")}
+	if len(scope.Deny) > 0 {
+		parts = append(parts, "deny "+strings.Join(scope.Deny, ", "))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func isLive() bool {

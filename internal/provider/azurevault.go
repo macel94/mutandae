@@ -15,10 +15,10 @@ import (
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
-// azureDemoVault delivers demo credentials into an existing Azure Key Vault.
+// azureDemoVault delivers scoped credentials into an existing Azure Key Vault.
 // It is the azure-entra implementation of the CloudVault capability: every
-// provisioned or renewed mutandae-demo-* client secret is written as a new
-// Key Vault secret version, and every use reads the versioned value back.
+// provisioned or renewed in-scope client secret is written as a new Key Vault
+// secret version, and every use reads the versioned value back.
 //
 // Trust boundary: the vault must already exist and the governor application
 // must already hold the Key Vault data-plane role (see docs/live-demo.md);
@@ -32,6 +32,7 @@ type azureDemoVault struct {
 	azure        *AzureClient
 	httpClient   *http.Client
 	now          func() time.Time
+	scope        Scope
 }
 
 // azureVaultNamePattern is the Key Vault secret-name character set
@@ -44,7 +45,7 @@ var azureVersionPattern = regexp.MustCompile(`^[0-9A-Za-z-]{1,64}$`)
 // newAzureDemoVault validates an existing vault URL and returns the vault
 // capability bound to the governor's AzureClient (which mints the
 // https://vault.azure.net/.default tokens).
-func newAzureDemoVault(vaultURL, secretPrefix string, azure *AzureClient, httpClient *http.Client, now func() time.Time) (*azureDemoVault, error) {
+func newAzureDemoVault(vaultURL, secretPrefix string, scope Scope, azure *AzureClient, httpClient *http.Client, now func() time.Time) (*azureDemoVault, error) {
 	if azure == nil {
 		return nil, errors.New("azure: Azure client is required for Key Vault delivery")
 	}
@@ -68,7 +69,7 @@ func newAzureDemoVault(vaultURL, secretPrefix string, azure *AzureClient, httpCl
 	if now == nil {
 		now = time.Now
 	}
-	return &azureDemoVault{baseURL: parsed.String(), secretPrefix: prefix, azure: azure, httpClient: httpClient, now: now}, nil
+	return &azureDemoVault{baseURL: parsed.String(), secretPrefix: prefix, scope: scope, azure: azure, httpClient: httpClient, now: now}, nil
 }
 
 // StoreSecret writes the credential as a new version of the identity's vault
@@ -165,8 +166,8 @@ func (v *azureDemoVault) RevokeSecret(ctx context.Context, identity protocol.Mac
 // secretName derives the deterministic Key Vault secret name for a demo
 // identity and validates it against the Key Vault character set.
 func (v *azureDemoVault) secretName(identity protocol.MachineIdentity) (string, error) {
-	if !isDemoName(identity.Name) {
-		return "", fmt.Errorf("azure: refusing vault access outside the %s* namespace", demoPrefix)
+	if strings.TrimSpace(identity.Name) == "" || !v.scope.Match(identity.Name) {
+		return "", forbiddenScopeError(azureKind, identity.Name, v.scope)
 	}
 	name := v.secretPrefix + "-" + strings.ToLower(identity.Name)
 	name = strings.Trim(name, "-")

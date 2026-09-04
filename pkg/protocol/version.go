@@ -25,6 +25,11 @@ package protocol
 // "api_version" field on every envelope rather than hard-coding a string.
 const Version = "v1"
 
+// APIVersion is the explicit wire-version name used by schema and integration
+// checks. It aliases Version so protocol envelopes and schema assertions cannot
+// drift onto different version strings.
+const APIVersion = Version
+
 // MediaType is the versioned JSON representation of the μTandae Protocol.
 const MediaType = "application/vnd.mutandae.v1+json"
 
