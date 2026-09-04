@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,25 +44,34 @@ type AWSSimulator struct {
 	accountID string
 	region    string
 	now       time.Time
+	scope     Scope
 	mu        sync.Mutex
 	users     map[string]iamUser // keyed by IAM user name
 	seq       int
 }
 
 // NewAWSSimulator returns an adapter that simulates the given AWS account at
-// time now. now fixes the simulated provider clock so the demo and its tests
-// stay deterministic; construction has no failure mode beyond configuration,
-// which main wiring validates.
-func NewAWSSimulator(accountID string, region string, now time.Time) *AWSSimulator {
+// time now. An omitted scope keeps the historical all-identities simulator
+// used by existing local fixtures; production composition passes an explicit
+// DemoScope. Supplying a zero Scope uses the safe mutandae-demo-* default.
+func NewAWSSimulator(accountID string, region string, now time.Time, scopes ...Scope) *AWSSimulator {
+	scope := simulatorConstructorScope(scopes)
 	now = now.UTC()
 	s := &AWSSimulator{
 		accountID: accountID,
 		region:    region,
 		now:       now,
+		scope:     scope,
 		users:     make(map[string]iamUser),
 	}
 	s.seed()
 	return s
+}
+
+// NewAWSSimulatorWithScope is the explicit safe constructor for callers that
+// want the simulator's zero Scope to resolve to the demo namespace.
+func NewAWSSimulatorWithScope(accountID, region string, now time.Time, scope Scope) *AWSSimulator {
+	return NewAWSSimulator(accountID, region, now, scope)
 }
 
 func (s *AWSSimulator) seed() {
@@ -82,9 +92,14 @@ func (s *AWSSimulator) seed() {
 		{"data-exporting", "staging", "Data Engineering", "Export pipeline", "Exports catalog data to downstream systems", "high", 90, protocol.HealthHealthy, 18 * 24 * time.Hour, 72 * 24 * time.Hour},
 		{"metrics-publisher", "production", "Observability", "Metrics publishing", "Publishes application metrics", "medium", 90, protocol.HealthHealthy, 75 * 24 * time.Hour, 15 * 24 * time.Hour},
 	}
+	demoSeed := isDemoScope(s.scope)
 	for i, item := range seed {
-		s.users[item.name] = iamUser{
-			name:        item.name,
+		name := item.name
+		if demoSeed {
+			name = demoPrefix + name
+		}
+		s.users[name] = iamUser{
+			name:        name,
 			environment: item.env,
 			team:        item.team,
 			service:     item.service,
@@ -94,9 +109,9 @@ func (s *AWSSimulator) seed() {
 			seedHealth:  item.health,
 			lastRotated: s.now.Add(-item.lastRotated),
 			key: accessKey{
-				keyID:       fmt.Sprintf("%s-infra-key", item.name),
+				keyID:       fmt.Sprintf("%s-infra-key", name),
 				fingerprint: fmt.Sprintf("sha256:%032x", i+1),
-				location:    fmt.Sprintf("iam://%s/user/%s", s.accountID, item.name),
+				location:    fmt.Sprintf("iam://%s/user/%s", s.accountID, name),
 				expiresAt:   s.now.Add(item.expiresIn),
 			},
 		}
@@ -105,6 +120,9 @@ func (s *AWSSimulator) seed() {
 
 // Kind returns the stable provider identifier.
 func (s *AWSSimulator) Kind() string { return awsKind }
+
+// Scope returns the active non-secret governance scope.
+func (s *AWSSimulator) Scope() Scope { return s.scope }
 
 // Discover returns the provider's current view of machine identities (the
 // enabled IAM users in the simulated account). Control-plane governance IDs
@@ -115,8 +133,8 @@ func (s *AWSSimulator) Discover(_ context.Context) ([]protocol.MachineIdentity, 
 
 	identities := make([]protocol.MachineIdentity, 0, len(s.users))
 	for _, user := range s.users {
-		if user.disabled {
-			continue // retired/disabled users are not (re)discovered
+		if user.disabled || !s.scope.Match(user.name) {
+			continue // retired/disabled or out-of-scope users are not discovered
 		}
 		identities = append(identities, s.toIdentity(user))
 	}
@@ -179,6 +197,14 @@ func (s *AWSSimulator) Rotate(_ context.Context, identity protocol.MachineIdenti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	name := strings.TrimSpace(identity.Provider.ProviderID)
+	if name == "" {
+		name = strings.TrimSpace(identity.Name)
+	}
+	if !s.scope.Match(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(awsKind, name, s.scope)
+	}
+	identity.Provider.ProviderID = name
 	user, err := s.userByName(identity)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -202,6 +228,14 @@ func (s *AWSSimulator) Retire(_ context.Context, identity protocol.MachineIdenti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	name := strings.TrimSpace(identity.Provider.ProviderID)
+	if name == "" {
+		name = strings.TrimSpace(identity.Name)
+	}
+	if !s.scope.Match(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(awsKind, name, s.scope)
+	}
+	identity.Provider.ProviderID = name
 	user, err := s.userByName(identity)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
@@ -209,4 +243,61 @@ func (s *AWSSimulator) Retire(_ context.Context, identity protocol.MachineIdenti
 	user.disabled = true
 	s.users[user.name] = user
 	return s.toIdentity(user), nil
+}
+
+// PlanRotate returns the simulator's read-only replacement sequence.
+func (s *AWSSimulator) PlanRotate(_ context.Context, id string) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan rotate requires an identity id", awsKind)
+	}
+	if !s.scope.Match(name) {
+		return nil, forbiddenScopeError(awsKind, name, s.scope)
+	}
+	s.mu.Lock()
+	_, ok := s.users[name]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown provider id %q", awsKind, name)
+	}
+	return []protocol.PlannedOperation{
+		planned("aws.create_access_key", name, "Create a replacement access key and make it the active credential.", true, false),
+		planned("aws.revoke_old_access_key", name, "Revoke the previous access key after the replacement is available.", false, true),
+	}, nil
+}
+
+// PlanRetire returns the simulator's read-only decommission sequence.
+func (s *AWSSimulator) PlanRetire(_ context.Context, id string) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan retire requires an identity id", awsKind)
+	}
+	if !s.scope.Match(name) {
+		return nil, forbiddenScopeError(awsKind, name, s.scope)
+	}
+	s.mu.Lock()
+	_, ok := s.users[name]
+	s.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown provider id %q", awsKind, name)
+	}
+	return []protocol.PlannedOperation{
+		planned("aws.disable_user", name, "Disable the IAM user so it is no longer governed or discoverable.", true, true),
+	}, nil
+}
+
+func (s *AWSSimulator) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	id := identity.Provider.ProviderID
+	if id == "" {
+		id = identity.Name
+	}
+	return s.PlanRotate(ctx, id)
+}
+
+func (s *AWSSimulator) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	id := identity.Provider.ProviderID
+	if id == "" {
+		id = identity.Name
+	}
+	return s.PlanRetire(ctx, id)
 }

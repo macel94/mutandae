@@ -110,6 +110,7 @@ type ErrorCode string
 
 const (
 	ErrCodeInvalidRequest     ErrorCode = "invalid_request"
+	ErrCodeForbidden          ErrorCode = "forbidden"
 	ErrCodeConformanceFailure ErrorCode = "conformance_failure"
 	ErrCodeNotFound           ErrorCode = "not_found"
 	ErrCodeInvalidTransition  ErrorCode = "invalid_transition"

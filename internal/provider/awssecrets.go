@@ -178,18 +178,49 @@ func (a *AWSAdapter) RevokeSecret(ctx context.Context, identity protocol.Machine
 // awsSecretName derives the deterministic Secrets Manager name and validates
 // it against the service's ASCII character set and 512-byte maximum.
 func (a *AWSAdapter) awsSecretName(identity protocol.MachineIdentity, keyID string) (string, string, error) {
-	if !isDemoName(identity.Name) {
-		return "", "", a.redact(fmt.Sprintf("aws: refusing vault access outside the %s* namespace", demoPrefix))
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = strings.TrimSpace(identity.Provider.ProviderID)
+	}
+	if name == "" {
+		return "", "", forbiddenScopeError(awsKind, name, a.scope)
+	}
+	vaultScope := a.scope
+	if !a.scopeConfigured {
+		vaultScope = DemoScope()
+	}
+	if !vaultScope.Match(name) {
+		return "", "", forbiddenScopeError(awsKind, name, vaultScope)
+	}
+	if a.scopeConfigured && identity.Provider.ProviderID != "" && !a.inScope(identity.Provider.ProviderID) {
+		return "", "", forbiddenScopeError(awsKind, identity.Provider.ProviderID, a.scope)
 	}
 	effectiveKeyID := keyID
 	if effectiveKeyID == "" {
 		effectiveKeyID = "current"
 	}
-	name := "mutandae-demo/" + identity.Name + "/" + effectiveKeyID
-	if len(name) > 512 || !awsSecretsManagerNameAllowed(name) {
+	secretName := "mutandae-demo/" + name + "/" + effectiveKeyID
+	if len(secretName) > 512 || !awsSecretsManagerNameAllowed(secretName) {
 		return "", "", a.redact("aws: derived Secrets Manager secret name is invalid")
 	}
-	return name, effectiveKeyID, nil
+	return secretName, effectiveKeyID, nil
+}
+
+func (a *AWSAdapter) awsSecretNameLegacy(identity protocol.MachineIdentity, keyID string) (string, string, error) {
+	// Kept out of the call path intentionally; this marker makes accidental
+	// reintroduction of the pre-scope identity.Name mapping obvious in review.
+	if !a.inScope(identity.Name) {
+		return "", "", forbiddenScopeError(awsKind, identity.Name, a.scope)
+	}
+	effectiveKeyID := keyID
+	if effectiveKeyID == "" {
+		effectiveKeyID = "current"
+	}
+	secretName := "mutandae-demo/" + identity.Name + "/" + effectiveKeyID
+	if len(secretName) > 512 || !awsSecretsManagerNameAllowed(secretName) {
+		return "", "", a.redact("aws: derived Secrets Manager secret name is invalid")
+	}
+	return secretName, effectiveKeyID, nil
 }
 
 func awsSecretsManagerNameAllowed(name string) bool {

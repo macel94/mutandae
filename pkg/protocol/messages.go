@@ -1,6 +1,9 @@
 package protocol
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Envelopes are the request/response documents exchanged on the control-plane
 // API and between the control plane and provider adapters. Every envelope
@@ -77,15 +80,49 @@ type RotateRequest struct {
 	RequestedBy string   `json:"requested_by,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
 	Metadata    Metadata `json:"metadata,omitempty"`
+	// DryRun asks the control plane to return a plan without calling a
+	// mutating provider operation, changing lifecycle state, or emitting audit
+	// events. The JSON value must be a boolean when supplied.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // RotateResponse returns the post-rotation identity, the run, and its events.
+// When Plan is non-nil the response is a dry-run and Identity/Rotation are
+// unchanged representations; no provider or store mutation occurred.
 type RotateResponse struct {
 	APIVersion string           `json:"api_version"`
 	Identity   MachineIdentity  `json:"identity"`
 	Rotation   RotationRun      `json:"rotation"`
 	Events     []LifecycleEvent `json:"events,omitempty"`
+	Plan       *Plan            `json:"plan,omitempty"`
 	Error      *Error           `json:"error,omitempty"`
+}
+
+// MarshalJSON omits the zero execution run from a dry-run response. The Go
+// field remains a value for source compatibility with existing consumers, but
+// an advisory plan must not look like an executed rotation on the wire.
+func (r RotateResponse) MarshalJSON() ([]byte, error) {
+	type wireResponse struct {
+		APIVersion string           `json:"api_version"`
+		Identity   MachineIdentity  `json:"identity"`
+		Rotation   *RotationRun     `json:"rotation,omitempty"`
+		Events     []LifecycleEvent `json:"events,omitempty"`
+		Plan       *Plan            `json:"plan,omitempty"`
+		Error      *Error           `json:"error,omitempty"`
+	}
+	var rotation *RotationRun
+	if r.Plan == nil {
+		value := r.Rotation
+		rotation = &value
+	}
+	return json.Marshal(wireResponse{
+		APIVersion: r.APIVersion,
+		Identity:   r.Identity,
+		Rotation:   rotation,
+		Events:     r.Events,
+		Plan:       r.Plan,
+		Error:      r.Error,
+	})
 }
 
 // RequestedByOrDefault returns the actor that requested the rotation, defaulting
@@ -104,13 +141,19 @@ type RetireRequest struct {
 	RequestedBy string `json:"requested_by,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 	Confirm     bool   `json:"confirm"`
+	// DryRun asks for a retirement plan without calling the provider or
+	// changing lifecycle state. Confirmation is required only for the real
+	// mutation; the preview itself is always read-only.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
-// RetireResponse returns the post-retirement identity plus its events.
+// RetireResponse returns the post-retirement identity plus its events. When
+// Plan is non-nil the response is a dry-run and no retirement occurred.
 type RetireResponse struct {
 	APIVersion string           `json:"api_version"`
 	Identity   MachineIdentity  `json:"identity"`
 	Events     []LifecycleEvent `json:"events,omitempty"`
+	Plan       *Plan            `json:"plan,omitempty"`
 	Error      *Error           `json:"error,omitempty"`
 }
 
@@ -231,15 +274,16 @@ func (r ProvisionRequest) RequestedByOrDefault() string {
 // users. It deliberately excludes connection strings, credentials, provider
 // endpoints, and tenant identifiers.
 type Configuration struct {
-	Service         string    `json:"service"`
-	ProtocolVersion string    `json:"protocol_version"`
-	MediaType       string    `json:"media_type"`
-	Environment     string    `json:"environment"`
-	Provider        string    `json:"provider"`
-	Persistence     string    `json:"persistence"`
-	ReadOnly        bool      `json:"read_only"`
-	Features        []string  `json:"features"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	Service         string               `json:"service"`
+	ProtocolVersion string               `json:"protocol_version"`
+	MediaType       string               `json:"media_type"`
+	Environment     string               `json:"environment"`
+	Provider        string               `json:"provider"`
+	Persistence     string               `json:"persistence"`
+	ReadOnly        bool                 `json:"read_only"`
+	Features        []string             `json:"features"`
+	Providers       []ProviderDescriptor `json:"providers,omitempty"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 // ConfigurationResponse is the versioned envelope for the safe configuration

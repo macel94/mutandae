@@ -50,6 +50,36 @@ type CredentialReference struct {
 // key/value notes without breaking version conformance.
 type Metadata map[string]string
 
+// PlannedOperation is one provider-neutral step in a dry-run lifecycle plan.
+// Op is a stable short verb token; Detail is human-readable and deliberately
+// does not expose provider request/response shapes or secret material.
+type PlannedOperation struct {
+	Op          string `json:"op"`
+	Identity    string `json:"identity"`
+	Detail      string `json:"detail"`
+	Reversible  bool   `json:"reversible"`
+	Destructive bool   `json:"destructive"`
+}
+
+// Plan is the stable dry-run response object shared by rotate and retire.
+// Plans are advisory snapshots: callers should re-plan immediately before
+// applying a mutation because provider state may change in the meantime.
+type Plan struct {
+	DryRun      bool               `json:"dry_run"`
+	Operations  []PlannedOperation `json:"operations"`
+	ExpiresHint string             `json:"expires_hint"`
+}
+
+// ProviderDescriptor is a safe runtime description of a wired provider. Allow
+// and Deny contain only non-secret fnmatch-style scope patterns.
+type ProviderDescriptor struct {
+	Kind  string   `json:"kind"`
+	Label string   `json:"label"`
+	Scope string   `json:"scope"`
+	Allow []string `json:"allow,omitempty"`
+	Deny  []string `json:"deny,omitempty"`
+}
+
 // AzureIntegrationRequest is accepted only by the interactive integration
 // endpoint. ClientSecret is write-only: it must never be copied into a
 // response, event, snapshot, log, or HTML template.

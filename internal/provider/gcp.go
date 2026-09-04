@@ -60,10 +60,12 @@ type GCPAdapterConfig struct {
 	HTTPClient *http.Client
 	// Now pins the provider clock for deterministic tests.
 	Now func() time.Time
-	// DemoOnly restricts the adapter to the mutandae-demo-* namespace: Discover
-	// only returns demo service accounts and every mutation refuses anything
-	// else. The live demo enables this so the governor and any other non-demo
-	// service account in the project are neither listed nor actionable.
+	// Scope restricts which service-account email/name values this adapter may
+	// govern. Patterns use path.Match's fnmatch-style syntax, not regular
+	// expressions. Real adapters require at least one Allow pattern.
+	Scope Scope
+	// DemoOnly is retained as a deprecated internal compatibility bridge. New
+	// callers must use Scope; true maps to the safe mutandae-demo-* scope.
 	DemoOnly bool
 	// SecretManager enables the vault delivery capability: provisioned and
 	// renewed demo credentials are stored as versions of a Secret Manager
@@ -114,7 +116,15 @@ type GCPAdapter struct {
 	secretManager bool
 	httpClient    *http.Client
 	now           func() time.Time
-	demoOnly      bool
+	scope         Scope
+	// scopeConfigured distinguishes explicit provider scope configuration from
+	// legacy direct-constructor fixtures. Production composition always passes
+	// an explicit scope; the distinction keeps old vault fixtures compatible
+	// without weakening explicitly scoped adapters.
+	scopeConfigured bool
+	// demoOnly remains for old in-package callers; Scope is authoritative for
+	// all new construction and wiring.
+	demoOnly bool
 
 	mu             sync.Mutex
 	accessToken    string
@@ -133,6 +143,10 @@ func NewGCPAdapter(cfg GCPAdapterConfig) (*GCPAdapter, error) {
 	}
 	if strings.TrimSpace(cfg.KeyJSON) == "" {
 		return nil, errors.New("gcp: service account key json is required")
+	}
+	scope, err := validateRealScope(cfg.Scope, cfg.DemoOnly)
+	if err != nil {
+		return nil, fmt.Errorf("gcp: %w", err)
 	}
 	var keyFile struct {
 		Type           string `json:"type"`
@@ -182,17 +196,19 @@ func NewGCPAdapter(cfg GCPAdapterConfig) (*GCPAdapter, error) {
 		now = time.Now
 	}
 	return &GCPAdapter{
-		projectID:     projectID,
-		region:        region,
-		clientEmail:   keyFile.ClientEmail,
-		privateKey:    privateKey,
-		tokenURI:      tokenURI,
-		iamBaseURL:    strings.TrimSuffix(iamBaseURL, "/"),
-		secretBaseURL: strings.TrimSuffix(secretBaseURL, "/"),
-		secretManager: cfg.SecretManager,
-		httpClient:    httpClient,
-		now:           now,
-		demoOnly:      cfg.DemoOnly,
+		projectID:       projectID,
+		region:          region,
+		clientEmail:     keyFile.ClientEmail,
+		privateKey:      privateKey,
+		tokenURI:        tokenURI,
+		iamBaseURL:      strings.TrimSuffix(iamBaseURL, "/"),
+		secretBaseURL:   strings.TrimSuffix(secretBaseURL, "/"),
+		secretManager:   cfg.SecretManager,
+		httpClient:      httpClient,
+		now:             now,
+		scope:           scope,
+		scopeConfigured: len(cfg.Scope.Allow) > 0 || len(cfg.Scope.Deny) > 0 || cfg.DemoOnly,
+		demoOnly:        cfg.DemoOnly,
 	}, nil
 }
 
@@ -216,6 +232,16 @@ func parseRSAPrivateKey(data []byte) (*rsa.PrivateKey, error) {
 
 // Kind returns the stable provider identifier.
 func (a *GCPAdapter) Kind() string { return gcpKind }
+
+// Scope returns the active non-secret governance scope.
+func (a *GCPAdapter) Scope() Scope { return a.scope }
+
+func (a *GCPAdapter) inScope(name string) bool {
+	if a.demoOnly && !a.scopeConfigured {
+		return DemoScope().Match(name)
+	}
+	return a.scope.Match(name)
+}
 
 // ConsumeOneTimeSecret returns and clears the most recent one-time private key
 // (decoded PEM) created by Rotate. Nothing in the protocol ever carries it.
@@ -258,9 +284,9 @@ func (a *GCPAdapter) Discover(ctx context.Context) ([]protocol.MachineIdentity, 
 		if account.Disabled {
 			continue
 		}
-		// In demo-only mode only the mutandae-demo-* namespace is governed;
-		// the governor and any other helper service account stay invisible.
-		if a.demoOnly && !isDemoName(account.Email) {
+		// Scope filtering happens before key enumeration, so identities outside
+		// the allow-list remain invisible.
+		if !a.inScope(account.Email) {
 			continue
 		}
 		keys, err := a.listKeys(ctx, account.Email)
@@ -376,12 +402,15 @@ func gcpKeyExpiry(key gcpServiceAccountKey) time.Time {
 // deleted. IAM's hard ceiling of 10 user-managed keys per service account is
 // respected by removing a non-current key first when needed.
 func (a *GCPAdapter) Rotate(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
+	if name := strings.TrimSpace(identity.Name); name != "" && !a.inScope(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, name, a.scope)
+	}
 	email, err := a.emailFor(ctx, identity.Provider.ProviderID)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
 	}
-	if a.demoOnly && !isDemoName(email) {
-		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to rotate %q outside the %s* namespace", gcpKind, email, demoPrefix)
+	if !a.inScope(email) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, email, a.scope)
 	}
 	keys, err := a.listKeys(ctx, email)
 	if err != nil {
@@ -429,13 +458,65 @@ func (a *GCPAdapter) Rotate(ctx context.Context, identity protocol.MachineIdenti
 // account itself is left in place (deleting it is the caller's cleanup step);
 // with all keys deleted it is no longer rediscovered, matching the simulator
 // contract.
+func (a *GCPAdapter) PlanRotate(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan rotate requires an identity id", gcpKind)
+	}
+	if !a.inScope(name) {
+		return nil, forbiddenScopeError(gcpKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("gcp.delete_key", name, "If the service account is at the ten-key ceiling, remove the oldest non-current user-managed key first.", true, true),
+		planned("gcp.create_service_account_key", name, "Create a replacement user-managed key and retain its one-time private material for delivery.", true, false),
+		planned("gcp.verify_service_account_key", name, "Use the provider response as evidence that the replacement key is current.", true, false),
+		planned("gcp.delete_key", name, "Delete the rotated-out user-managed key after the replacement is available.", false, true),
+	}, nil
+}
+
+func (a *GCPAdapter) PlanRetire(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan retire requires an identity id", gcpKind)
+	}
+	if !a.inScope(name) {
+		return nil, forbiddenScopeError(gcpKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("gcp.delete_key", name, "Delete every user-managed key so the service account has no downloadable credential.", false, true),
+	}, nil
+}
+
+func (a *GCPAdapter) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	// Real GCP mutations resolve the provider id to an email. A plan is
+	// provider-neutral, so use the visible identity name when it is the email.
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = identity.Provider.ProviderID
+	}
+	return a.PlanRotate(ctx, name)
+}
+
+func (a *GCPAdapter) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(identity.Name)
+	if name == "" {
+		name = identity.Provider.ProviderID
+	}
+	return a.PlanRetire(ctx, name)
+}
+
 func (a *GCPAdapter) Retire(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
+	if name := strings.TrimSpace(identity.Name); name != "" && !a.inScope(name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, name, a.scope)
+	}
 	email, err := a.emailFor(ctx, identity.Provider.ProviderID)
 	if err != nil {
 		return protocol.MachineIdentity{}, err
 	}
-	if a.demoOnly && !isDemoName(email) {
-		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to retire %q outside the %s* namespace", gcpKind, email, demoPrefix)
+	if !a.inScope(email) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(gcpKind, email, a.scope)
 	}
 	keys, err := a.listKeys(ctx, email)
 	if err != nil {
@@ -457,22 +538,22 @@ func (a *GCPAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 	return view, nil
 }
 
-// Create provisions a brand-new, zero-permission service account in the demo
-// namespace and one user-managed key, returning the private key exactly once.
-// A freshly created service account has NO IAM roles, so it cannot do anything
-// until someone grants it access — which the adapter (and the governor's
-// least-privilege role) explicitly cannot do. The account ID is capped to stay
-// within GCP's 6-30 character service account ID rule.
+// Create provisions a brand-new, zero-permission service account inside the
+// configured Scope and one user-managed key, returning the private key exactly
+// once. A freshly created service account has NO IAM roles, so it cannot do
+// anything until someone grants it access — which the adapter (and the
+// governor's least-privilege role) explicitly cannot do. The account ID is
+// capped to stay within GCP's 6-30 character service account ID rule.
 func (a *GCPAdapter) Create(ctx context.Context, hint string) (protocol.ProvisionResponse, error) {
 	if len(hint) > 7 {
 		hint = hint[:7]
 	}
-	name, err := buildDemoName(hint, 8)
+	name, err := buildScopedName(a.scope, hint, 8)
 	if err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
-	if !isDemoName(name) {
-		return protocol.ProvisionResponse{}, fmt.Errorf("%s: refusing to create a service account outside the %s* namespace", gcpKind, demoPrefix)
+	if !a.inScope(name + "@" + a.projectID + ".iam.gserviceaccount.com") {
+		return protocol.ProvisionResponse{}, forbiddenScopeError(gcpKind, name, a.scope)
 	}
 	account, err := a.createServiceAccount(ctx, name, "Mutandae public demo (zero permissions)")
 	if err != nil {

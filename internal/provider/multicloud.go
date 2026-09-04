@@ -123,6 +123,113 @@ func (m *MultiProvider) Retire(ctx context.Context, identity protocol.MachineIde
 	return a.Retire(ctx, identity)
 }
 
+// PlanRotate routes a plan request when a caller has only a lifecycle id. The
+// richer IdentityPlanner path below is what the lifecycle store uses; this
+// method remains useful to callers exercising the optional Planner boundary
+// directly.
+func (m *MultiProvider) PlanRotate(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	var lastErr error
+	for _, a := range m.adapters {
+		planner, ok := a.(interface {
+			PlanRotate(context.Context, string) ([]protocol.PlannedOperation, error)
+		})
+		if !ok {
+			continue
+		}
+		operations, err := planner.PlanRotate(ctx, id)
+		if err == nil {
+			return operations, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return genericPlan(id, true), nil
+}
+
+// PlanRetire is the Planner counterpart to PlanRotate.
+func (m *MultiProvider) PlanRetire(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	var lastErr error
+	for _, a := range m.adapters {
+		planner, ok := a.(interface {
+			PlanRetire(context.Context, string) ([]protocol.PlannedOperation, error)
+		})
+		if !ok {
+			continue
+		}
+		operations, err := planner.PlanRetire(ctx, id)
+		if err == nil {
+			return operations, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return genericPlan(id, false), nil
+}
+
+// PlanRotateIdentity preserves the provider binding while routing a dry run.
+func (m *MultiProvider) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	a, err := m.adapterFor(identity.Provider.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if planner, ok := a.(interface {
+		PlanRotateIdentity(context.Context, protocol.MachineIdentity) ([]protocol.PlannedOperation, error)
+	}); ok {
+		return planner.PlanRotateIdentity(ctx, identity)
+	}
+	if planner, ok := a.(interface {
+		PlanRotate(context.Context, string) ([]protocol.PlannedOperation, error)
+	}); ok {
+		id := identity.Provider.ProviderID
+		if id == "" {
+			id = identity.Name
+		}
+		return planner.PlanRotate(ctx, id)
+	}
+	return genericPlan(identity.Name, true), nil
+}
+
+// PlanRetireIdentity preserves the provider binding while routing a dry run.
+func (m *MultiProvider) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	a, err := m.adapterFor(identity.Provider.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if planner, ok := a.(interface {
+		PlanRetireIdentity(context.Context, protocol.MachineIdentity) ([]protocol.PlannedOperation, error)
+	}); ok {
+		return planner.PlanRetireIdentity(ctx, identity)
+	}
+	if planner, ok := a.(interface {
+		PlanRetire(context.Context, string) ([]protocol.PlannedOperation, error)
+	}); ok {
+		id := identity.Provider.ProviderID
+		if id == "" {
+			id = identity.Name
+		}
+		return planner.PlanRetire(ctx, id)
+	}
+	return genericPlan(identity.Name, false), nil
+}
+
+func genericPlan(identity string, rotate bool) []protocol.PlannedOperation {
+	if rotate {
+		return []protocol.PlannedOperation{
+			planned("lifecycle.create_credential", identity, "Create a replacement credential without applying provider changes.", true, false),
+			planned("lifecycle.verify_credential", identity, "Verify the replacement credential before it becomes current.", true, false),
+			planned("lifecycle.revoke_previous_credential", identity, "Revoke the previous credential after successful verification.", false, true),
+		}
+	}
+	return []protocol.PlannedOperation{
+		planned("lifecycle.revoke_credential", identity, "Revoke the governed credential without applying provider changes.", false, true),
+		planned("lifecycle.mark_retired", identity, "Mark the identity retired after provider decommissioning succeeds.", false, true),
+	}
+}
+
 // Create routes a provisioning request to the named provider's adapter and
 // returns a zero-permission identity plus a one-time secret. It returns
 // ErrCreateUnsupported when the target adapter does not implement CloudCreate

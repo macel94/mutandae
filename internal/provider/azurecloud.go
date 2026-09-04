@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,6 +25,9 @@ type AzureCloudAdapterConfig struct {
 	ClientSecret string
 	HTTPClient   *http.Client
 	Now          func() time.Time
+	// Scope restricts which application display names this adapter may govern.
+	// Patterns use path.Match's fnmatch-style syntax, not regular expressions.
+	Scope Scope
 	// VaultURL, when set, enables the vault delivery capability against an
 	// existing Azure Key Vault (must be an HTTPS *.vault.azure.net endpoint).
 	// The governor application needs the Key Vault data-plane role documented
@@ -35,17 +39,18 @@ type AzureCloudAdapterConfig struct {
 }
 
 // AzureCloudAdapter is a real Microsoft Graph adapter behind the CloudAdapter
-// boundary for the public demo. It identifies governed identities strictly by
-// the mutandae-demo-* display-name namespace: it discovers, creates, rotates,
-// and retires only applications whose display name carries that prefix. This is
-// the safety boundary — the demo server's Application.ReadWrite.All credential
-// could otherwise reach unrelated tenant applications, so every mutation is
-// guarded by the namespace check in addition to the credential being
+// boundary for the public demo. It identifies governed applications through
+// its configured Scope: it discovers, creates, rotates, and retires only
+// display names matched by that allow-list and not excluded by its deny-list.
+// This is the safety boundary — the demo server's Application.ReadWrite.All
+// credential could otherwise reach unrelated tenant applications, so every
+// mutation is guarded by the scope in addition to the credential being
 // least-privilege.
 type AzureCloudAdapter struct {
 	client   *AzureClient
 	tenantID string
 	now      func() time.Time
+	scope    Scope
 	vault    *azureDemoVault
 
 	mu            sync.Mutex
@@ -66,6 +71,10 @@ func NewAzureCloudAdapter(cfg AzureCloudAdapterConfig) (*AzureCloudAdapter, erro
 	if cfg.ClientSecret == "" {
 		return nil, errors.New("azure: client_secret is required")
 	}
+	scope, err := validateRealScope(cfg.Scope, false)
+	if err != nil {
+		return nil, fmt.Errorf("azure: %w", err)
+	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -82,9 +91,9 @@ func NewAzureCloudAdapter(cfg AzureCloudAdapterConfig) (*AzureCloudAdapter, erro
 	if err != nil {
 		return nil, err
 	}
-	adapter := &AzureCloudAdapter{client: client, tenantID: cfg.TenantID, now: now}
+	adapter := &AzureCloudAdapter{client: client, tenantID: cfg.TenantID, now: now, scope: scope}
 	if strings.TrimSpace(cfg.VaultURL) != "" {
-		vault, err := newAzureDemoVault(cfg.VaultURL, cfg.VaultSecretPrefix, client, httpClient, now)
+		vault, err := newAzureDemoVault(cfg.VaultURL, cfg.VaultSecretPrefix, scope, client, httpClient, now)
 		if err != nil {
 			return nil, err
 		}
@@ -96,16 +105,20 @@ func NewAzureCloudAdapter(cfg AzureCloudAdapterConfig) (*AzureCloudAdapter, erro
 // Kind returns the stable provider identifier.
 func (a *AzureCloudAdapter) Kind() string { return azureKind }
 
-// Discover returns every demo-namespaced application that owns at least one
-// credential.
+// Scope returns the active non-secret governance scope.
+func (a *AzureCloudAdapter) Scope() Scope { return a.scope }
+
+// Discover returns every in-scope application that owns at least one
+// credential. Filtering happens before an application is exposed to the
+// control plane, regardless of whether the scope is a prefix or a pattern.
 func (a *AzureCloudAdapter) Discover(ctx context.Context) ([]protocol.MachineIdentity, error) {
-	apps, err := a.client.ListApplicationsByPrefix(ctx, demoPrefix)
+	apps, err := a.client.ListApplications(ctx)
 	if err != nil {
 		return nil, err
 	}
 	identities := make([]protocol.MachineIdentity, 0, len(apps))
 	for _, app := range apps {
-		if !isDemoName(app.DisplayName) {
+		if !a.scope.Match(app.DisplayName) {
 			continue
 		}
 		if len(app.Credentials) == 0 {
@@ -121,12 +134,12 @@ func (a *AzureCloudAdapter) Discover(ctx context.Context) ([]protocol.MachineIde
 // secret exactly once. A newly created application has no API permissions and
 // no admin consent, so it cannot do anything by itself.
 func (a *AzureCloudAdapter) Create(ctx context.Context, hint string) (protocol.ProvisionResponse, error) {
-	name, err := buildDemoName(hint, 8)
+	name, err := buildScopedName(a.scope, hint, 8)
 	if err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
-	if !isDemoName(name) {
-		return protocol.ProvisionResponse{}, errors.New("azure: refusing to create an application outside the " + demoPrefix + "* namespace")
+	if !a.scope.Match(name) {
+		return protocol.ProvisionResponse{}, forbiddenScopeError(azureKind, name, a.scope)
 	}
 	app, err := a.client.CreateApplication(ctx, protocol.AzureApplicationCreateRequest{DisplayName: name})
 	if err != nil {
@@ -152,8 +165,8 @@ func (a *AzureCloudAdapter) Create(ctx context.Context, hint string) (protocol.P
 // Rotate adds a new client secret and removes the rotated-out one for a demo
 // application. Rotation never grants permissions.
 func (a *AzureCloudAdapter) Rotate(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
-	if !isDemoName(identity.Name) {
-		return protocol.MachineIdentity{}, errors.New("azure: refusing to rotate an application outside the " + demoPrefix + "* namespace")
+	if strings.TrimSpace(identity.Name) == "" || !a.scope.Match(identity.Name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(azureKind, identity.Name, a.scope)
 	}
 	objectID := identity.Provider.ProviderID
 	currentKeyID := identity.Credential.KeyID
@@ -169,6 +182,54 @@ func (a *AzureCloudAdapter) Rotate(ctx context.Context, identity protocol.Machin
 	a.rememberOneTimeSecret(secret.SecretText, secret.Credential.KeyID)
 	app := protocol.AzureApplication{ObjectID: objectID, DisplayName: identity.Name, Credentials: []protocol.AzureCredential{secret.Credential}}
 	return a.toIdentity(app), nil
+}
+
+// PlanRotate mirrors Graph mutations performed by Rotate without contacting
+// Graph or changing adapter state.
+func (a *AzureCloudAdapter) PlanRotate(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan rotate requires an identity id", azureKind)
+	}
+	if !a.scope.Match(name) {
+		return nil, forbiddenScopeError(azureKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("graph.addPassword", name, "Add a replacement Microsoft Graph password credential.", true, false),
+		planned("graph.removePassword", name, "Remove the rotated-out Graph password credential.", false, true),
+	}, nil
+}
+
+// PlanRetire mirrors the Graph application deletion performed by Retire.
+func (a *AzureCloudAdapter) PlanRetire(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan retire requires an identity id", azureKind)
+	}
+	if !a.scope.Match(name) {
+		return nil, forbiddenScopeError(azureKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("graph.deleteApplication", name, "Delete the application registration so its credentials can no longer authenticate.", false, true),
+	}, nil
+}
+
+func (a *AzureCloudAdapter) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	name := identity.Name
+	if strings.TrimSpace(name) == "" {
+		name = identity.Provider.ProviderID
+	}
+	return a.PlanRotate(ctx, name)
+}
+
+func (a *AzureCloudAdapter) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	name := identity.Name
+	if strings.TrimSpace(name) == "" {
+		name = identity.Provider.ProviderID
+	}
+	return a.PlanRetire(ctx, name)
 }
 
 // rememberOneTimeSecret buffers the freshly issued secret in process memory so
@@ -196,8 +257,8 @@ func (a *AzureCloudAdapter) ConsumeOneTimeSecret() string {
 // control plane keeps a retired record in memory; the object is gone from
 // Graph so it is no longer rediscovered.
 func (a *AzureCloudAdapter) Retire(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
-	if !isDemoName(identity.Name) {
-		return protocol.MachineIdentity{}, errors.New("azure: refusing to retire an application outside the " + demoPrefix + "* namespace")
+	if strings.TrimSpace(identity.Name) == "" || !a.scope.Match(identity.Name) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(azureKind, identity.Name, a.scope)
 	}
 	objectID := identity.Provider.ProviderID
 	if err := a.client.DeleteApplication(ctx, objectID); err != nil {
@@ -277,6 +338,9 @@ func azureFingerprint(objectID string) string {
 // as a new secret version. It is refused when no vault is configured or the
 // identity sits outside the demo namespace.
 func (a *AzureCloudAdapter) StoreSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, secret string) (protocol.VaultReference, error) {
+	if strings.TrimSpace(identity.Name) == "" || !a.scope.Match(identity.Name) {
+		return protocol.VaultReference{}, forbiddenScopeError(azureKind, identity.Name, a.scope)
+	}
 	if a.vault == nil {
 		return protocol.VaultReference{}, ErrVaultUnsupported
 	}
@@ -286,6 +350,9 @@ func (a *AzureCloudAdapter) StoreSecret(ctx context.Context, identity protocol.M
 // ReadSecret retrieves the current (or pinned) version of the identity's
 // credential from the configured Key Vault.
 func (a *AzureCloudAdapter) ReadSecret(ctx context.Context, identity protocol.MachineIdentity, keyID, version string) (string, protocol.VaultReference, error) {
+	if strings.TrimSpace(identity.Name) == "" || !a.scope.Match(identity.Name) {
+		return "", protocol.VaultReference{}, forbiddenScopeError(azureKind, identity.Name, a.scope)
+	}
 	if a.vault == nil {
 		return "", protocol.VaultReference{}, ErrVaultUnsupported
 	}
@@ -294,6 +361,9 @@ func (a *AzureCloudAdapter) ReadSecret(ctx context.Context, identity protocol.Ma
 
 // RevokeSecret disables the current version of the identity's vault secret.
 func (a *AzureCloudAdapter) RevokeSecret(ctx context.Context, identity protocol.MachineIdentity, keyID string) (protocol.VaultReference, error) {
+	if strings.TrimSpace(identity.Name) == "" || !a.scope.Match(identity.Name) {
+		return protocol.VaultReference{}, forbiddenScopeError(azureKind, identity.Name, a.scope)
+	}
 	if a.vault == nil {
 		return protocol.VaultReference{}, ErrVaultUnsupported
 	}

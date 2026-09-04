@@ -49,11 +49,12 @@ type AWSAdapterConfig struct {
 	HTTPClient *http.Client
 	// Now pins the provider clock for deterministic tests.
 	Now func() time.Time
-	// DemoOnly restricts the adapter to the mutandae-demo-* namespace: Discover
-	// only returns demo identities and every mutation refuses anything else.
-	// The live demo enables this so real productive IAM users in the account
-	// are neither listed nor actionable, while the eval harness keeps the full
-	// provider view.
+	// Scope restricts which IAM user names this adapter may govern. Patterns
+	// use path.Match's fnmatch-style syntax, not regular expressions. Real
+	// adapters require at least one Allow pattern.
+	Scope Scope
+	// DemoOnly is retained as a deprecated internal compatibility bridge. New
+	// callers must use Scope; true maps to the safe mutandae-demo-* scope.
 	DemoOnly bool
 	// SecretsManager enables the vault delivery capability: provisioned and
 	// renewed demo credentials are stored as versions of a Secrets Manager
@@ -77,14 +78,22 @@ type AWSAdapterConfig struct {
 // consumed — it is never placed into a protocol object, event, snapshot, or
 // log.
 type AWSAdapter struct {
-	accountID       string
-	region          string
-	accessKeyID     string
-	secretKey       string
-	sessionToken    string
-	endpoint        string
-	httpClient      *http.Client
-	now             func() time.Time
+	accountID    string
+	region       string
+	accessKeyID  string
+	secretKey    string
+	sessionToken string
+	endpoint     string
+	httpClient   *http.Client
+	now          func() time.Time
+	scope        Scope
+	// scopeConfigured distinguishes explicit provider scope configuration from
+	// legacy direct-constructor fixtures. Production composition always passes
+	// an explicit scope; the distinction keeps old vault fixtures compatible
+	// without weakening explicitly scoped adapters.
+	scopeConfigured bool
+	// demoOnly remains for old in-package callers; Scope is authoritative for
+	// all new construction and wiring.
 	demoOnly        bool
 	secretsManager  bool
 	secretsEndpoint string
@@ -108,6 +117,10 @@ func NewAWSAdapter(cfg AWSAdapterConfig) (*AWSAdapter, error) {
 	}
 	if cfg.SecretKey == "" {
 		return nil, errors.New("aws: secret access key is required")
+	}
+	scope, err := validateRealScope(cfg.Scope, cfg.DemoOnly)
+	if err != nil {
+		return nil, fmt.Errorf("aws: %w", err)
 	}
 	region := strings.TrimSpace(cfg.Region)
 	if region == "" {
@@ -134,6 +147,8 @@ func NewAWSAdapter(cfg AWSAdapterConfig) (*AWSAdapter, error) {
 		endpoint:        endpoint,
 		httpClient:      httpClient,
 		now:             now,
+		scope:           scope,
+		scopeConfigured: len(cfg.Scope.Allow) > 0 || len(cfg.Scope.Deny) > 0 || cfg.DemoOnly,
 		demoOnly:        cfg.DemoOnly,
 		secretsManager:  cfg.SecretsManager,
 		secretsEndpoint: strings.TrimSpace(cfg.SecretsManagerEndpoint),
@@ -142,6 +157,16 @@ func NewAWSAdapter(cfg AWSAdapterConfig) (*AWSAdapter, error) {
 
 // Kind returns the stable provider identifier.
 func (a *AWSAdapter) Kind() string { return awsKind }
+
+// Scope returns the active non-secret governance scope.
+func (a *AWSAdapter) Scope() Scope { return a.scope }
+
+func (a *AWSAdapter) inScope(name string) bool {
+	if a.demoOnly && !a.scopeConfigured {
+		return DemoScope().Match(name)
+	}
+	return a.scope.Match(name)
+}
 
 // ConsumeOneTimeSecret returns and clears the most recent one-time secret
 // created by Rotate. The second call returns "". Nothing in the protocol ever
@@ -188,9 +213,9 @@ func (a *AWSAdapter) Discover(ctx context.Context) ([]protocol.MachineIdentity, 
 	}
 	identities := make([]protocol.MachineIdentity, 0, len(users))
 	for _, user := range users {
-		// In demo-only mode the account's productive users are intentionally
-		// invisible: only the mutandae-demo-* namespace is governed.
-		if a.demoOnly && !isDemoName(user.UserName) {
+		// Scope filtering happens before any per-user detail or key request, so
+		// identities outside the allow-list remain invisible.
+		if !a.inScope(user.UserName) {
 			continue
 		} // IAM ListUsers does not return tags, but GetUser does. Ownership and
 		// renewal metadata are stored as MUTANDAE_* tags (see
@@ -314,8 +339,8 @@ func (a *AWSAdapter) Rotate(ctx context.Context, identity protocol.MachineIdenti
 	if userName == "" {
 		return protocol.MachineIdentity{}, fmt.Errorf("%s: rotate requires a provider_id (IAM user name)", awsKind)
 	}
-	if a.demoOnly && !isDemoName(userName) {
-		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to rotate %q outside the %s* namespace", awsKind, userName, demoPrefix)
+	if !a.inScope(userName) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(awsKind, userName, a.scope)
 	}
 	keys, err := a.listAccessKeys(ctx, userName)
 	if err != nil {
@@ -370,13 +395,61 @@ func (a *AWSAdapter) Rotate(ctx context.Context, identity protocol.MachineIdenti
 // Retire decommissions the identity in IAM by deleting every access key the
 // user owns and removing a console login profile when present. With all keys
 // deleted the user is no longer rediscovered, matching the simulator contract.
+func (a *AWSAdapter) PlanRotate(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan rotate requires an identity id", awsKind)
+	}
+	if !a.inScope(name) {
+		return nil, forbiddenScopeError(awsKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("aws.delete_access_key", name, "If the IAM user is at the two-key ceiling, remove the oldest non-current access key first.", true, true),
+		planned("aws.create_access_key", name, "Create a replacement access key and retain its one-time secret for delivery.", true, false),
+		planned("aws.verify_access_key", name, "Use the provider response as evidence that the replacement key is current.", true, false),
+		planned("aws.delete_access_key", name, "Delete the rotated-out access key after the replacement is available.", false, true),
+	}, nil
+}
+
+func (a *AWSAdapter) PlanRetire(ctx context.Context, id string) ([]protocol.PlannedOperation, error) {
+	_ = ctx
+	name := strings.TrimSpace(id)
+	if name == "" {
+		return nil, fmt.Errorf("%s: plan retire requires an identity id", awsKind)
+	}
+	if !a.inScope(name) {
+		return nil, forbiddenScopeError(awsKind, name, a.scope)
+	}
+	return []protocol.PlannedOperation{
+		planned("aws.delete_access_key", name, "Delete every access key owned by the IAM user.", false, true),
+		planned("aws.delete_login_profile", name, "Remove the optional console login profile when present.", false, true),
+	}, nil
+}
+
+func (a *AWSAdapter) PlanRotateIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(identity.Provider.ProviderID)
+	if name == "" {
+		name = identity.Name
+	}
+	return a.PlanRotate(ctx, name)
+}
+
+func (a *AWSAdapter) PlanRetireIdentity(ctx context.Context, identity protocol.MachineIdentity) ([]protocol.PlannedOperation, error) {
+	name := strings.TrimSpace(identity.Provider.ProviderID)
+	if name == "" {
+		name = identity.Name
+	}
+	return a.PlanRetire(ctx, name)
+}
+
 func (a *AWSAdapter) Retire(ctx context.Context, identity protocol.MachineIdentity) (protocol.MachineIdentity, error) {
 	userName := strings.TrimSpace(identity.Provider.ProviderID)
 	if userName == "" {
 		return protocol.MachineIdentity{}, fmt.Errorf("%s: retire requires a provider_id (IAM user name)", awsKind)
 	}
-	if a.demoOnly && !isDemoName(userName) {
-		return protocol.MachineIdentity{}, fmt.Errorf("%s: refusing to retire %q outside the %s* namespace", awsKind, userName, demoPrefix)
+	if !a.inScope(userName) {
+		return protocol.MachineIdentity{}, forbiddenScopeError(awsKind, userName, a.scope)
 	}
 	keys, err := a.listAccessKeys(ctx, userName)
 	if err != nil {
@@ -409,20 +482,19 @@ func (a *AWSAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 	return view, nil
 }
 
-// Create provisions a brand-new, zero-permission IAM user in the demo
-// namespace: it creates the user (no policy, no group, no console login) and
-// one access key, returning the key secret exactly once. The owner metadata is
-// tagged so the user is re-discovered with meaningful ownership. The adapter
-// never attaches a policy or adds the user to a group, and it refuses to
-// operate outside the mutandae-demo-* namespace so the scoped governor
-// credentials are the outer safety boundary.
+// Create provisions a brand-new, zero-permission IAM user inside the
+// configured Scope: it creates the user (no policy, no group, no console
+// login) and one access key, returning the key secret exactly once. The owner
+// metadata is tagged so the user is re-discovered with meaningful ownership.
+// The adapter never attaches a policy or adds the user to a group, and the
+// scope remains the outer safety boundary for the governor credentials.
 func (a *AWSAdapter) Create(ctx context.Context, hint string) (protocol.ProvisionResponse, error) {
-	name, err := buildDemoName(hint, 8)
+	name, err := buildScopedName(a.scope, hint, 8)
 	if err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
-	if !isDemoName(name) {
-		return protocol.ProvisionResponse{}, fmt.Errorf("%s: refusing to create an IAM user outside the %s* namespace", awsKind, demoPrefix)
+	if !a.inScope(name) {
+		return protocol.ProvisionResponse{}, forbiddenScopeError(awsKind, name, a.scope)
 	}
 	if _, err := a.createUser(ctx, name); err != nil {
 		return protocol.ProvisionResponse{}, err
