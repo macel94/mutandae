@@ -12,8 +12,10 @@ FROM alpine:3.24
 ARG BUILD_SHA=unknown
 LABEL org.opencontainers.image.revision=$BUILD_SHA
 RUN addgroup -S mutandae && adduser -S -G mutandae mutandae
+RUN mkdir -p /data && chown mutandae:mutandae /data
 COPY --from=build /out/mutandae /usr/local/bin/mutandae
 USER mutandae
 EXPOSE 8080
 ENV PORT=8080
+HEALTHCHECK --start-period=10s --interval=30s --timeout=3s --retries=3 CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${PORT:-8080}/readyz || exit 1
 ENTRYPOINT ["/usr/local/bin/mutandae"]

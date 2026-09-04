@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListUsers",
+        "iam:GetUser",
+        "iam:ListAccessKeys"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ScopedIdentityKeyLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateAccessKey",
+        "iam:UpdateAccessKey",
+        "iam:DeleteAccessKey",
+        "iam:DeleteLoginProfile",
+        "iam:TagUser"
+      ],
+      "Resource": "arn:aws:iam::<AWS_ACCOUNT_ID>:user/mutandae-*"
+    },
+    {
+      "Sid": "ScopedMutandaeSecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:*",
+      "Resource": "arn:aws:secretsmanager:*:<AWS_ACCOUNT_ID>:secret:mutandae-*",
+      "Condition": {
+        "StringLike": {
+          "secretsmanager:Name": "mutandae-*"
+        }
+      }
+    },
+    {
+      "Sid": "CreateScopedMutandaeSecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:CreateSecret",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "secretsmanager:Name": "mutandae-*"
+        }
+      }
+    }
+  ]
+}

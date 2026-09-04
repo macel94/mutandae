@@ -1,0 +1,115 @@
+# Five-minute local preview. This stack is intentionally development-only:
+# the Vault server is in-memory, uses a well-known dev token, and must never be
+# exposed to a network or used for production credentials.
+services:
+  mutandae:
+    build:
+      context: .
+    ports:
+      - "8080:${PORT:-8080}"
+    environment:
+      PORT: "${PORT:-8080}"
+      MUTANDAE_ENVIRONMENT: "preview"
+      REDIS_URL: "redis://redis:6379/0"
+      VAULT_ADDR: "http://vault:8200"
+      # DANGER: this default is a disposable Vault dev-mode root token only.
+      # Never reuse it, expose it, or put real credentials in this stack.
+      VAULT_TOKEN: "${MUTANDAE_DEV_VAULT_TOKEN:-mutandae-dev-root}"
+      VAULT_MOUNT: "mutandae"
+      VAULT_SECRET_PREFIX: "demo"
+      MUTANDAE_VAULT: "${MUTANDAE_VAULT:-auto}"
+      AZURE_KEY_VAULT_URL: "${AZURE_KEY_VAULT_URL:-}"
+      MUTANDAE_AUDIT_FILE: "/data/audit.jsonl"
+      MUTANDAE_SWEEP_INTERVAL: "${MUTANDAE_SWEEP_INTERVAL:-0}"
+      # The compose file intentionally does not pass cloud credentials. To
+      # opt into real Azure locally, first review docs/azure-integration.md,
+      # then use a private override or an explicit command such as:
+      # docker compose run --rm -e AZURE_TENANT_ID -e AZURE_CLIENT_ID \
+      #   -e AZURE_CLIENT_SECRET mutandae
+      # Never put those values in this file, an override committed to git, or
+      # a shared terminal/log.
+    volumes:
+      - mutandae-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:$${PORT:-8080}/readyz || exit 1"]
+      start_period: 10s
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    user: "redis"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - redis-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # BIG WARNING: this is an in-memory Vault dev server with a disposable root
+  # token. It is for this local preview only; it has no durable storage and
+  # must never be published, internet-exposed, or used with real secrets.
+  vault:
+    image: hashicorp/vault:1.21.4
+    user: "vault"
+    command: ["server", "-dev"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "${MUTANDAE_DEV_VAULT_TOKEN:-mutandae-dev-root}"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      SKIP_CHOWN: "true"
+      SKIP_SETCAP: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Vault dev mode creates secret/ by default. Create the explicitly named
+  # KV-v2 mount before the application starts, without running as root.
+  vault-init:
+    image: hashicorp/vault:1.21.4
+    user: "vault"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      until vault status -address="$$VAULT_ADDR" >/dev/null 2>&1; do sleep 1; done;
+      if ! vault secrets list -address="$$VAULT_ADDR" -format=json | grep -q '"mutandae/"'; then
+        vault secrets enable -address="$$VAULT_ADDR" -path=mutandae kv-v2 >/dev/null;
+      fi
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      VAULT_TOKEN: "${MUTANDAE_DEV_VAULT_TOKEN:-mutandae-dev-root}"
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  mutandae-data:
+  redis-data:
