@@ -226,7 +226,8 @@ func TestDashboardRendersProductAndInteractionSurface(t *testing.T) {
 }
 
 func TestDashboardSummarySeparatesExpiringAndOverdue(t *testing.T) {
-	view := testServer(t).dashboardView()
+	server := testServer(t)
+	view := server.dashboardView()
 	if view.Total != 4 || view.Healthy != 1 || view.Expiring != 2 || view.Attention != 2 {
 		t.Fatalf("summary = (total=%d healthy=%d expiring=%d attention=%d), want (4, 1, 2, 2)", view.Total, view.Healthy, view.Expiring, view.Attention)
 	}
@@ -234,6 +235,29 @@ func TestDashboardSummarySeparatesExpiringAndOverdue(t *testing.T) {
 	// there on every page.
 	if len(view.Chrome.Providers) != 1 || view.Chrome.Providers[0].Kind != "azure-entra" || view.Chrome.Providers[0].Scope != "tenant tenant-1" {
 		t.Fatalf("providers = %+v, want one azure-entra adapter scoped to tenant tenant-1", view.Chrome.Providers)
+	}
+
+	// Retirement marks the record's health as attention, but decommissioned
+	// identities are not actionable work: retiring a previously healthy
+	// identity must leave the Needs-attention counter unchanged.
+	if _, err := server.lifecycle.Retire(context.Background(), protocol.RetireRequest{ID: "data-pipeline", Confirm: true}, testNow()); err != nil {
+		t.Fatalf("Retire() error = %v", err)
+	}
+	view = server.dashboardView()
+	if view.Attention != 2 {
+		t.Fatalf("attention after retiring a healthy identity = %d, want 2 (retired records are never counted)", view.Attention)
+	}
+	if view.Total != 4 {
+		t.Fatalf("total after retirement = %d, want 4 (retired records stay tracked)", view.Total)
+	}
+
+	// Retiring an attention-worthy identity resolves its incident: the counter
+	// drops by exactly that identity's contribution.
+	if _, err := server.lifecycle.Retire(context.Background(), protocol.RetireRequest{ID: "payments-api", Confirm: true}, testNow()); err != nil {
+		t.Fatalf("Retire() error = %v", err)
+	}
+	if view = server.dashboardView(); view.Attention != 1 {
+		t.Fatalf("attention after retiring an overdue identity = %d, want 1", view.Attention)
 	}
 }
 

@@ -1101,7 +1101,12 @@ func (s *Server) dashboardView() dashboardView {
 		case string(protocol.UrgencyExpiring):
 			view.Expiring++
 		}
-		if item.RenewalHealth != string(protocol.HealthHealthy) || item.Urgency == string(protocol.UrgencyOverdue) {
+		// Retirement marks the record's health as attention for the audit
+		// trail, but retired identities are decommissioned records — they can
+		// never become an incident and the dashboard's Attention filter
+		// excludes them too. Only governance-relevant identities count here.
+		if item.Urgency != string(protocol.UrgencyRetired) &&
+			(item.RenewalHealth != string(protocol.HealthHealthy) || item.Urgency == string(protocol.UrgencyOverdue)) {
 			view.Attention++
 		}
 	}
