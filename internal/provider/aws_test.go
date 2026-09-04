@@ -514,3 +514,30 @@ func TestSignV4OfficialVector(t *testing.T) {
 		t.Fatalf("signV4(get-vanilla) = %q, want %q", signature, want)
 	}
 }
+
+// TestAWSRetireIsIdempotentWhenUserAlreadyGone proves retirement completes
+// when the IAM user was already deleted out-of-band (NoSuchEntity), matching
+// the demo's honest lifecycle: the governance state converges on retired.
+func TestAWSRetireIsIdempotentWhenUserAlreadyGone(t *testing.T) {
+	fixed := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	iam := newFakeIAM(t)
+	adapter, server := newAWSAdapterForTest(t, iam, fixed)
+	defer server.Close()
+
+	identity := protocol.MachineIdentity{
+		Name: "mutandae-demo-gone",
+		Provider: protocol.ProviderBinding{
+			Provider: "aws-iam", ProviderID: "mutandae-demo-gone", AccountID: "572030963802", Region: "us-east-1",
+		},
+		Credential: protocol.CredentialReference{Kind: "access_key", KeyID: "AKIGONE"},
+		State:      protocol.StateActive,
+	}
+	// The user does not exist in the fake (never seeded): Retire must succeed.
+	view, err := adapter.Retire(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Retire of an already-deleted user: %v", err)
+	}
+	if view.State != protocol.StateRetired {
+		t.Fatalf("state = %q, want retired", view.State)
+	}
+}

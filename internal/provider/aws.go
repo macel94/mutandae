@@ -380,11 +380,19 @@ func (a *AWSAdapter) Retire(ctx context.Context, identity protocol.MachineIdenti
 	}
 	keys, err := a.listAccessKeys(ctx, userName)
 	if err != nil {
-		return protocol.MachineIdentity{}, err
+		// A missing IAM user is already retired in the provider; treat the
+		// identity as decommissioned instead of failing the lifecycle change.
+		if !a.entityMissing(err) {
+			return protocol.MachineIdentity{}, err
+		}
+		keys = nil
 	}
 	for _, key := range keys {
 		if err := a.deleteAccessKey(ctx, userName, key.AccessKeyID); err != nil {
-			return protocol.MachineIdentity{}, err
+			if !a.entityMissing(err) {
+				return protocol.MachineIdentity{}, err
+			}
+			break
 		}
 	}
 	// Best-effort: DeleteLoginProfile is optional in the documented policy and
@@ -646,6 +654,13 @@ func (a *AWSAdapter) call(ctx context.Context, params url.Values, output any) er
 		return a.redact(fmt.Sprintf("%s: decode response: %v", action, err))
 	}
 	return nil
+}
+
+// entityMissing reports whether an IAM error means the user (or key) is
+// already gone. Retirement and key deletion then complete idempotently
+// instead of surfacing a conflict for work an operator already finished.
+func (a *AWSAdapter) entityMissing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NoSuchEntity")
 }
 
 func (a *AWSAdapter) tolerateNoSuchEntity(ctx context.Context, params url.Values) error {
