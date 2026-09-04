@@ -196,17 +196,47 @@ jobs:
       - name: Attest image provenance with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.provenance.json --type https://slsa.dev/provenance/v1 "$IMAGE"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.provenance.json --type https://slsa.dev/provenance/v1 "$IMAGE"; then
+              exit 0
+            fi
+            echo "cosign attest failed (attempt $attempt); retrying after backoff"
+            sleep $((attempt * 20))
+          done
+          echo "cosign attest failed after all retries"
+          exit 1
 
       - name: Attest image SBOM with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.sbom.cdx.json --type cyclonedx "$IMAGE"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.sbom.cdx.json --type cyclonedx "$IMAGE"; then
+              exit 0
+            fi
+            echo "cosign attest failed (attempt $attempt); retrying after backoff"
+            sleep $((attempt * 20))
+          done
+          echo "cosign attest failed after all retries"
+          exit 1
 
       - name: Attest native production vulnerability decision with Cosign
         env:
           IMAGE: ${{ steps.image.outputs.reference }}
-        run: cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.vulnerability-decision.json --type https://belacca.com/attestations/vulnerability/v1 "$IMAGE"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if cosign attest --yes --new-bundle-format=false --use-signing-config=false --predicate mutandae.vulnerability-decision.json --type https://belacca.com/attestations/vulnerability/v1 "$IMAGE"; then
+              exit 0
+            fi
+            echo "cosign attest failed (attempt $attempt); retrying after backoff"
+            sleep $((attempt * 20))
+          done
+          echo "cosign attest failed after all retries"
+          exit 1
 
       - name: Record deployed immutable image
         shell: bash
