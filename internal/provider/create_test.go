@@ -233,3 +233,70 @@ func TestGCPAdapterCreateProducesZeroRoleServiceAccount(t *testing.T) {
 		}
 	}
 }
+
+// TestGCPAdapterCreateRetriesKeyCreationThroughPropagationLag reproduces the
+// live failure: IAM's serviceAccounts.create returned, but the immediately
+// following keys.create answered 404 because the new account was not yet
+// visible. The adapter must retry briefly and succeed without side effects.
+func TestGCPAdapterCreateRetriesKeyCreationThroughPropagationLag(t *testing.T) {
+	var keyAttempts int
+	fake := &propagationFake{keyAttempts: &keyAttempts}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	adapter, err := NewGCPAdapter(GCPAdapterConfig{
+		ProjectID:  "demo",
+		Region:     "us-central1",
+		KeyJSON:    testGCPKeyJSON(),
+		IAMBaseURL: server.URL,
+		TokenURI:   server.URL + "/token",
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewGCPAdapter: %v", err)
+	}
+	resp, err := adapter.Create(context.Background(), "lag")
+	if err != nil {
+		t.Fatalf("Create through propagation lag: %v", err)
+	}
+	if resp.OneTimeSecret == "" {
+		t.Fatal("one-time secret missing")
+	}
+	if keyAttempts != 3 {
+		t.Fatalf("keys.create attempts = %d, want 3 (two 404s then success)", keyAttempts)
+	}
+}
+
+// propagationFake serves a working SA create and fails the first two key
+// creates with the propagation 404 before succeeding.
+type propagationFake struct {
+	keyAttempts *int
+}
+
+func (f *propagationFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/token") {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"tok","expires_in":3600,"token_type":"Bearer"}`)
+		return
+	}
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/serviceAccounts") && r.Method == http.MethodPost:
+		var body struct {
+			AccountID string `json:"accountId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		fmt.Fprintf(w, `{"name":"projects/p/serviceAccounts/%s@demo.iam.gserviceaccount.com","projectId":"p","uniqueId":"111","email":"%s@demo.iam.gserviceaccount.com","displayName":"d","disabled":false}`, body.AccountID, body.AccountID)
+	case strings.HasSuffix(r.URL.Path, "/keys") && r.Method == http.MethodPost:
+		*f.keyAttempts++
+		if *f.keyAttempts <= 2 {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":{"code":404,"status":"NOT_FOUND","message":"Service account projects/p/serviceAccounts/lag@demo.iam.gserviceaccount.com does not exist."}}`)
+			return
+		}
+		fmt.Fprint(w, `{"name":"projects/p/serviceAccounts/a@demo.iam.gserviceaccount.com/keys/key-1","keyAlgorithm":"KEY_ALG_RSA_2048","keyType":"USER_MANAGED","privateKeyData":"cHJpdmF0ZS1rZXk=","validAfterTime":"2026-09-02T00:00:00Z"}`)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":404,"message":"not found"}}`)
+	}
+}

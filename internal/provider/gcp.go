@@ -478,7 +478,7 @@ func (a *GCPAdapter) Create(ctx context.Context, hint string) (protocol.Provisio
 	if err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
-	key, err := a.createKey(ctx, account.Email)
+	key, err := a.createKeyAfterPropagation(ctx, account.Email)
 	if err != nil {
 		return protocol.ProvisionResponse{}, err
 	}
@@ -638,6 +638,35 @@ func (a *GCPAdapter) createKey(ctx context.Context, email string) (gcpServiceAcc
 		return gcpServiceAccountKey{}, fmt.Errorf("%s: keys.create returned an incomplete response", gcpKind)
 	}
 	return key, nil
+}
+
+// createKeyAfterPropagation wraps createKey with a bounded retry for the one
+// deterministic post-create race: IAM's serviceAccounts.create may return
+// before the new account is visible to keys.create, which answers 404. The
+// failed POST never had side effects, so retrying is safe; anything else
+// surfaces immediately.
+func (a *GCPAdapter) createKeyAfterPropagation(ctx context.Context, email string) (gcpServiceAccountKey, error) {
+	const attempts = 5
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(900 * time.Millisecond):
+			case <-ctx.Done():
+				return gcpServiceAccountKey{}, ctx.Err()
+			}
+		}
+		key, err := a.createKey(ctx, email)
+		if err == nil {
+			return key, nil
+		}
+		lastErr = err
+		text := err.Error()
+		if !strings.Contains(text, "NOT_FOUND") && !strings.Contains(text, "does not exist") {
+			return gcpServiceAccountKey{}, err
+		}
+	}
+	return gcpServiceAccountKey{}, lastErr
 }
 
 func (a *GCPAdapter) deleteKey(ctx context.Context, keyName string) error {
