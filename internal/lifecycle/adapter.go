@@ -22,6 +22,7 @@ var (
 	ErrNotFound           = errors.New("identity not found")
 	ErrInvalidTransition  = errors.New("invalid lifecycle transition")
 	ErrAlreadyRetired     = errors.New("identity is retired")
+	ErrNotRetired         = errors.New("identity must be retired before it can be deleted")
 	ErrRotationInProgress = errors.New("identity already has a rotation in progress")
 	ErrProviderFailure    = errors.New("provider adapter failed")
 	ErrConfirmationNeeded = errors.New("retirement requires explicit confirmation")
@@ -101,6 +102,8 @@ func ErrorCode(err error) protocol.ErrorCode {
 		return protocol.ErrCodeInvalidTransition
 	case errors.Is(err, ErrAlreadyRetired):
 		return protocol.ErrCodeAlreadyRetired
+	case errors.Is(err, ErrNotRetired):
+		return protocol.ErrCodeConflict
 	case errors.Is(err, ErrRotationInProgress):
 		return protocol.ErrCodeRotationInProgress
 	case errors.Is(err, ErrProviderFailure):

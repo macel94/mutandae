@@ -568,6 +568,69 @@ func (s *Store) Retire(ctx context.Context, req protocol.RetireRequest, now time
 	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity, Events: events}, nil
 }
 
+// Delete permanently removes a retired machine identity — the record, its
+// audit events, and its rotation runs — from the control-plane store. It is
+// the final decommissioning step: only retired identities can be deleted,
+// explicit confirmation is required, and the operation cannot be undone.
+// The response carries the identity as it stood at deletion plus the final
+// audit snapshot (including the terminal identity.deleted event), so callers
+// retain the evidence after the purge. Best-effort vault revocation runs
+// first, so no usable credential copy outlives the record; revocation
+// failures surface as attention events inside that final snapshot.
+func (s *Store) Delete(ctx context.Context, req protocol.DeleteRequest, now time.Time) (protocol.DeleteResponse, error) {
+	if !req.Confirm {
+		return protocol.DeleteResponse{}, ErrConfirmationNeeded
+	}
+	s.mu.Lock()
+	now = now.UTC()
+	identity, ok := s.identities[req.ID]
+	if !ok {
+		s.mu.Unlock()
+		return protocol.DeleteResponse{}, ErrNotFound
+	}
+	if identity.State != protocol.StateRetired {
+		s.mu.Unlock()
+		return protocol.DeleteResponse{}, fmt.Errorf("%w: %s", ErrNotRetired, identity.State)
+	}
+	s.mu.Unlock()
+
+	// Retirement must already have revoked the vault copies; the delete
+	// re-revokes best-effort so a failed retirement revocation cannot leave a
+	// usable credential behind a purged record. Failures land in the final
+	// audit snapshot below.
+	if vault := s.vault(); vault != nil {
+		s.revokeFromVault(ctx, identity, req.RequestedByOrDefault(), now)
+	}
+	s.revokeFromCommonVault(ctx, identity, now)
+
+	s.mu.Lock()
+	// A concurrent delete may have won the race; the record is already gone
+	// and its evidence was returned to that caller.
+	if _, stillThere := s.identities[req.ID]; !stillThere {
+		s.mu.Unlock()
+		return protocol.DeleteResponse{}, ErrNotFound
+	}
+	s.addEvent(identity.ID, now, protocol.EventIdentityDeleted,
+		"Permanently deleted "+identity.Name+" and its audit trail from the control plane ("+req.Reason+")",
+		req.RequestedByOrDefault(), protocol.OutcomeSuccess,
+		map[string]string{"reason": req.Reason, "state": string(identity.State)}, "")
+	events := s.eventsSnapshotLocked(identity.ID)
+	delete(s.identities, identity.ID)
+	delete(s.events, identity.ID)
+	delete(s.runs, identity.ID)
+	if err := s.persistLocked(ctx); err != nil {
+		s.mu.Unlock()
+		return protocol.DeleteResponse{}, err
+	}
+	s.mu.Unlock()
+	return protocol.DeleteResponse{
+		APIVersion: protocol.Version,
+		Deleted:    true,
+		Identity:   identity,
+		Events:     events,
+	}, nil
+}
+
 // revokeFromVault disables the vault copy of a retired credential and records
 // the credential.revoked audit event.
 func (s *Store) revokeFromVault(ctx context.Context, identity protocol.MachineIdentity, operator string, now time.Time) {

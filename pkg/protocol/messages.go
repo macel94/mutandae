@@ -123,6 +123,39 @@ func (r RetireRequest) RequestedByOrDefault() string {
 	return ActorOperator
 }
 
+// DeleteRequest permanently removes a retired machine identity — the record,
+// its audit events, and its rotation runs — from the control-plane store.
+// Deletion is the final decommissioning step after retirement: it is only
+// legal for identities already retired, requires explicit confirmation, and
+// cannot be undone. The vault copy was already revoked at retirement; delete
+// re-revokes best-effort so no usable credential outlives the record.
+type DeleteRequest struct {
+	ID          string `json:"id"`
+	RequestedBy string `json:"requested_by,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Confirm     bool   `json:"confirm"`
+}
+
+// DeleteResponse returns the identity exactly as it stood at deletion plus
+// the final audit snapshot (including the terminal identity.deleted event),
+// so the caller retains the evidence after the store is purged.
+type DeleteResponse struct {
+	APIVersion string           `json:"api_version"`
+	Deleted    bool             `json:"deleted"`
+	Identity   MachineIdentity  `json:"identity"`
+	Events     []LifecycleEvent `json:"events,omitempty"`
+	Error      *Error           `json:"error,omitempty"`
+}
+
+// RequestedByOrDefault returns the actor that requested the deletion,
+// defaulting to the operator actor when none is supplied.
+func (r DeleteRequest) RequestedByOrDefault() string {
+	if r.RequestedBy != "" {
+		return r.RequestedBy
+	}
+	return ActorOperator
+}
+
 // ProvisionRequest asks the control plane to provision a brand-new machine
 // identity in a real tenant for the public demo. The created identity is always
 // zero-permission (no policy, role, group, or granted API permission) and is
@@ -316,7 +349,7 @@ type ErrorResponse struct {
 
 // DiscoveryResource advertises a single related protocol resource.
 type DiscoveryResource struct {
-	Rel      string `json:"rel"` // relation: identity, list, register, inspect, rotate, retire
+	Rel      string `json:"rel"` // relation: identity, list, register, inspect, rotate, retire, delete
 	Method   string `json:"method"`
 	HREF     string `json:"href"`
 	Envelope string `json:"envelope,omitempty"`

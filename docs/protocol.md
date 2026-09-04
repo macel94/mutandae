@@ -457,6 +457,7 @@ actor records.
 | `EventIdentityRetired` | `identity.retired` | Decommissioning |
 | `EventIdentityRevoked` | `identity.revoked` | Decommissioning |
 | `EventIdentityResurrected` | `identity.resurrected` | Decommissioning |
+| `EventIdentityDeleted` | `identity.deleted` | Permanent delete (terminal, response-only) |
 
 A rotation should emit exactly one `rotation.started` event followed by exactly
 one terminal event: `rotation.completed` or `rotation.failed`. The taxonomy
@@ -603,6 +604,11 @@ The complete pairwise transition table is:
 `KnownStates()` returns the canonical states in declaration order:
 `registered`, `active`, `renewing`, `retired`.
 
+`retired` is the terminal governance state: it has no outgoing transitions.
+A retired record can additionally be permanently deleted (§7.8) — a
+store-level purge of the record and its audit trail, not a lifecycle
+transition, and never a `State` value.
+
 ## 7. Message envelopes
 
 The message types are JSON documents exchanged on the control-plane API and
@@ -616,8 +622,8 @@ calls out an operation-level semantic requirement. Optional fields have
 #### `DiscoveryResource`
 
 A discovery resource advertises one related protocol resource. The documented
-relation values are `identity`, `list`, `register`, `inspect`, `rotate`, and
-`retire`.
+relation values are `identity`, `list`, `register`, `inspect`, `rotate`,
+`retire`, and `delete`.
 
 | Go field | JSON field | Go type | Required |
 | --- | --- | --- | --- |
@@ -814,7 +820,47 @@ it returns the exact actor string `operator` (`ActorOperator`).
 Use is refused for retired identities (retirement revokes the vault copy) and
 for adapters without a configured vault.
 
-### 7.8 Vault delivery semantics
+### 7.8 Delete (permanent removal of a retired identity)
+
+#### `DeleteRequest`
+
+`DeleteRequest` permanently removes a retired machine identity — the record,
+its audit events, and its rotation runs — from the control-plane store. Delete
+is the final decommissioning step: it is only legal for identities already in
+the `retired` state (a `conflict` failure names the rule otherwise), requires
+explicit confirmation, and cannot be undone. Retirement revokes the vault
+copy; delete re-revokes best-effort so no usable credential outlives the
+purged record, with any revocation failure audited inside the final snapshot.
+The response carries the identity exactly as it stood at deletion plus the
+final audit snapshot ending in the terminal `identity.deleted` event, so the
+caller retains the evidence after the purge. Delete is a store-level purge,
+not a lifecycle state transition: no `deleted` state exists.
+
+| Go field | JSON field | Go type | Required |
+| --- | --- | --- | --- |
+| `ID` | `id` | `string` | Yes (path) |
+| `RequestedBy` | `requested_by` | `string` | No (`omitempty`) |
+| `Reason` | `reason` | `string` | No (`omitempty`) |
+| `Confirm` | `confirm` | `bool` | Yes — requests without `confirm: true` fail with `invalid_request` |
+
+`RequestedByOrDefault()` returns `RequestedBy` when it is non-empty; otherwise
+it returns the exact actor string `operator` (`ActorOperator`).
+
+#### `DeleteResponse`
+
+| Go field | JSON field | Go type | Required |
+| --- | --- | --- | --- |
+| `APIVersion` | `api_version` | `string` | Yes |
+| `Deleted` | `deleted` | `bool` | Yes (`true` on success) |
+| `Identity` | `identity` | `MachineIdentity` | Yes (final pre-delete state) |
+| `Events` | `events` | `[]LifecycleEvent` | No (`omitempty`); the final audit snapshot |
+| `Error` | `error` | `*Error` | No (`omitempty`) |
+
+Wire operation: `DELETE /api/v1/identities/{id}` with an optional JSON body.
+Unknown identities return `not_found`; identities that are not retired return
+`conflict`. Discovery advertises the operation as `rel: "delete"`.
+
+### 7.9 Vault delivery semantics
 
 Provisioning and renewal may deliver the freshly issued credential to the
 selected provider-native vault. The delivered reference is carried on the
@@ -825,7 +871,7 @@ outcome and never fail the lifecycle operation itself. Vault references,
 events, and identity metadata carry vault URLs, secret names, and versions
 only — never secret material.
 
-### 7.9 Errors
+### 7.10 Errors
 
 #### `Error`
 

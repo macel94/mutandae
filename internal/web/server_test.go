@@ -430,6 +430,25 @@ func (f *fakeLifecycle) Retire(_ context.Context, req protocol.RetireRequest, no
 	return protocol.RetireResponse{APIVersion: protocol.Version, Identity: identity}, nil
 }
 
+func (f *fakeLifecycle) Delete(_ context.Context, req protocol.DeleteRequest, now time.Time) (protocol.DeleteResponse, error) {
+	identity, ok := f.Get(req.ID)
+	if !ok {
+		return protocol.DeleteResponse{}, lifecycle.ErrNotFound
+	}
+	if identity.State != protocol.StateRetired {
+		return protocol.DeleteResponse{}, lifecycle.ErrNotRetired
+	}
+	filtered := f.identities[:0]
+	for _, candidate := range f.identities {
+		if candidate.ID != req.ID {
+			filtered = append(filtered, candidate)
+		}
+	}
+	f.identities = filtered
+	delete(f.events, req.ID)
+	return protocol.DeleteResponse{APIVersion: protocol.Version, Deleted: true, Identity: identity}, nil
+}
+
 func (f *fakeLifecycle) Provision(_ context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error) {
 	identity := protocol.MachineIdentity{
 		ID:       "prov-1",

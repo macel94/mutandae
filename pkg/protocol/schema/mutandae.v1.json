@@ -436,6 +436,7 @@
         "identity.retired",
         "identity.revoked",
         "identity.resurrected",
+        "identity.deleted",
         "integration.connected",
         "application.created",
         "secret.created",

@@ -1,0 +1,35 @@
+{{ define "delete-result" }}
+<div class="activity-content">
+  <div class="panel-heading">
+    <div>
+      <p class="section-kicker">Permanently deleted · record purged</p>
+      <h2 id="audit-modal-title">{{ .Identity.Name }}</h2>
+      <p class="muted">{{ .Identity.Owner }} · {{ .Identity.Workload }}</p>
+    </div>
+    <span class="badge badge-retired"><span class="badge-dot"></span>Deleted</span>
+  </div>
+  <div class="identity-summary">
+    <div><span>Provider</span><strong>{{ .Identity.Provider }}</strong></div>
+    <div><span>Final state</span><strong>{{ .Identity.StateLabel }}</strong></div>
+    <div><span>Deleted</span><strong>{{ .Identity.ExpiryLabel }}</strong></div>
+  </div>
+  <p class="muted modal-note">The identity, its audit trail, and its rotation runs are gone from the control plane. The final audit snapshot below is the retained evidence; the vault copy was revoked at retirement and re-revoked during deletion.</p>
+  <div class="timeline">
+    {{ range .Events }}
+    <article class="timeline-event">
+      <span class="timeline-marker {{ eventClass .Outcome }}"></span>
+      <div class="timeline-body">
+        <div class="event-meta"><strong>{{ .Type }}</strong><time>{{ formatTime .At }}</time></div>
+        <p>{{ .Summary }}</p>
+        <small>{{ .Actor }} <span>·</span> {{ .Outcome }}</small>
+      </div>
+    </article>
+    {{ else }}
+    <p class="muted">No lifecycle events recorded.</p>
+    {{ end }}
+  </div>
+</div>
+<div id="identity-list" class="table-wrap" hx-swap-oob="true">
+  {{ template "identity-table" .Dashboard }}
+</div>
+{{ end }}

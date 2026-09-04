@@ -58,6 +58,10 @@ const (
 	EventIdentityRetired     EventType = "identity.retired"
 	EventIdentityRevoked     EventType = "identity.revoked"
 	EventIdentityResurrected EventType = "identity.resurrected"
+	// EventIdentityDeleted is the terminal audit record of a permanent
+	// delete. It is emitted in the delete response's event snapshot and never
+	// persists: the delete purges the record it belongs to.
+	EventIdentityDeleted EventType = "identity.deleted"
 )
 
 // Actor names for the events the control plane records itself. Adapters may

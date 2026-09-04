@@ -39,6 +39,7 @@ type LifecycleService interface {
 	Register(ctx context.Context, req protocol.RegisterRequest, now time.Time) (protocol.RegisterResponse, error)
 	Rotate(ctx context.Context, req protocol.RotateRequest, now time.Time) (protocol.RotateResponse, error)
 	Retire(ctx context.Context, req protocol.RetireRequest, now time.Time) (protocol.RetireResponse, error)
+	Delete(ctx context.Context, req protocol.DeleteRequest, now time.Time) (protocol.DeleteResponse, error)
 	Provision(ctx context.Context, req protocol.ProvisionRequest, now time.Time) (protocol.ProvisionResponse, error)
 	Use(ctx context.Context, req protocol.UseRequest, now time.Time) (protocol.UseResponse, error)
 }
@@ -183,6 +184,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /identities/{id}/events", s.identityEvents)
 	mux.HandleFunc("POST /identities/{id}/rotate", s.rotate)
 	mux.HandleFunc("POST /identities/{id}/retire", s.retire)
+	mux.HandleFunc("DELETE /identities/{id}", s.deleteIdentity)
 	mux.HandleFunc("POST /identities/{id}/use", s.use)
 	mux.HandleFunc("POST /identities/provision", s.provision)
 	// Protocol JSON API (versioned).
@@ -193,6 +195,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/identities/{id}", s.apiInspect)
 	mux.HandleFunc("POST /api/v1/identities/{id}/rotations", s.apiRotate)
 	mux.HandleFunc("POST /api/v1/identities/{id}/retire", s.apiRetire)
+	mux.HandleFunc("DELETE /api/v1/identities/{id}", s.apiDeleteIdentity)
 	mux.HandleFunc("POST /api/v1/identities/{id}/use", s.apiUse)
 	mux.HandleFunc("POST /api/v1/demo/identities", s.apiProvision)
 	// Health probes.
@@ -256,6 +259,56 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.identityList(w, r)
+}
+
+// deleteIdentity permanently purges a retired identity from the control
+// plane — the record, its audit trail, and its rotation runs. The browser
+// hx-confirm dialog is the explicit confirmation, so the request is confirmed
+// by construction; the protocol API route enforces the confirm flag itself.
+func (s *Server) deleteIdentity(w http.ResponseWriter, r *http.Request) {
+	req := protocol.DeleteRequest{
+		ID:          r.PathValue("id"),
+		RequestedBy: operatorOrDefault(r),
+		Reason:      "operator deleted from dashboard",
+		Confirm:     true,
+	}
+	resp, err := s.lifecycle.Delete(r.Context(), req, s.now())
+	if err != nil {
+		s.writeError(w, err, http.StatusConflict)
+		return
+	}
+	// The deleted identity is gone from the store; surface the terminal
+	// evidence in the audit modal and refresh the inventory out-of-band.
+	s.render(w, "delete-result", deleteResultView{
+		Identity:  toIdentityView(resp.Identity, s.now()),
+		Events:    resp.Events,
+		Dashboard: s.dashboardView(),
+	})
+}
+
+// apiDelete is the protocol DELETE operation: the final decommissioning step
+// for a retired identity. It requires explicit confirmation and returns the
+// final identity plus audit snapshot.
+func (s *Server) apiDeleteIdentity(w http.ResponseWriter, r *http.Request) {
+	var body protocol.DeleteRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+			s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "invalid request body")))
+			return
+		}
+	}
+	body.ID = r.PathValue("id")
+	body.RequestedBy = operatorOrDefault(r)
+	if !body.Confirm {
+		s.writeJSON(w, http.StatusBadRequest, protocol.Failure(protocol.NewError(protocol.ErrCodeInvalidRequest, "delete requires explicit confirmation (confirm: true)")))
+		return
+	}
+	resp, err := s.lifecycle.Delete(r.Context(), body, s.now())
+	if err != nil {
+		s.writeJSON(w, s.mutationErrorStatus(err), protocol.Failure(lifecycle.NewError(err)))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) retire(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +415,7 @@ func (s *Server) apiRoot(w http.ResponseWriter, r *http.Request) {
 			{Rel: "rotate", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/rotations", Envelope: "rotate"},
 			{Rel: "use", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/use", Envelope: "use"},
 			{Rel: "retire", Method: http.MethodPost, HREF: "/api/v1/identities/{id}/retire", Envelope: "retire"},
+			{Rel: "delete", Method: http.MethodDelete, HREF: "/api/v1/identities/{id}", Envelope: "delete"},
 		},
 	})
 }
@@ -1183,6 +1237,15 @@ type provisionResultView struct {
 	Dashboard dashboardView
 }
 
+// deleteResultView is the fragment for a permanent delete: the terminal
+// evidence (final identity + audit snapshot including identity.deleted)
+// rendered into the audit modal, plus an out-of-band inventory refresh.
+type deleteResultView struct {
+	Identity  identityView
+	Events    []protocol.LifecycleEvent
+	Dashboard dashboardView
+}
+
 // useResultView is the activity-panel fragment for a vault-backed credential
 // retrieval. It carries the secret value once; the audit trail records only
 // the vault reference.
@@ -1237,6 +1300,7 @@ type identityView struct {
 	UrgencyClass       string
 	ExpiryLabel        string
 	ExpiryRelative     string
+	ExpiryTitle        string
 	LastRotatedLabel   string
 	VaultLabel         string
 	VaultVersion       string
@@ -1290,6 +1354,19 @@ func toIdentityView(identity protocol.MachineIdentity, now time.Time) identityVi
 			relative = "Due in " + formatDays(days)
 		}
 		base.ExpiryRelative = relative
+	}
+	// A retired identity is out of governance: the original expiry is no
+	// longer a renewal deadline, so the column shows the retirement date
+	// instead of a misleading "due in N days" (or "overdue") reading.
+	if identity.State == protocol.StateRetired {
+		retired := identity.UpdatedAt
+		if retired.IsZero() {
+			retired = now
+		}
+		base.ExpiryRelative = "Retired"
+		base.ExpiryLabel = retired.UTC().Format("Jan 02, 2006")
+		base.ExpiryTitle = "Retired " + retired.UTC().Format("Jan 02, 2006") + " · the original expiry " +
+			identity.ExpiresAt.Format("Jan 02, 2006") + " no longer applies"
 	}
 	// Vault state comes from provider-neutral identity metadata recorded at
 	// delivery time: names, URLs, and versions only — never secret material.
