@@ -13,17 +13,45 @@
 # The harness NEVER mutates identities outside the eval prefix and skips any
 # cloud whose credentials are absent.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+
+usage() {
+	cat <<'USAGE'
+Usage: scripts/eval-realclouds.sh [aws|gcp|azure|--help]
+
+Runs the disposable real-cloud conformance evaluator. Set the documented
+cloud credentials first; absent clouds are skipped by the Go harness.
+The default evaluator mutates only identities under MUTANDAE_EVAL_PREFIX
+(default mutandae-eval), then rotates and retires them.
+USAGE
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+	usage
+	exit 0
+fi
+if [[ $# -gt 1 ]]; then
+	printf 'error: expected at most one cloud selector\n' >&2
+	usage >&2
+	exit 2
+fi
+
+cat >&2 <<'WARNING'
+DANGER: the real-cloud evaluator creates/rotates/retires disposable cloud
+identities. Run only with narrowly scoped evaluation principals and a
+mutandae-eval* namespace; clean up credentials and principals afterward.
+WARNING
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd -- "$script_dir/.." || exit 1
 
 export MUTANDAE_EVAL="${MUTANDAE_EVAL:-1}"
 select="${1:-}"
-run_arg=""
+go_args=(-tags=realclouds -count=1 -v)
 case "$select" in
-	aws) run_arg="-run TestRealCloud" ;;
-	gcp) run_arg="-run TestRealCloud" ;;
-	azure) run_arg="-run TestAzureReal" ;;
-	"") run_arg="" ;;
+	aws|gcp) go_args+=(-run TestRealCloud) ;;
+	azure) go_args+=(-run TestAzureReal) ;;
+	"") ;;
 	*) echo "unknown cloud: $select (use aws|gcp|azure)" >&2; exit 2 ;;
 esac
 
-go test -tags=realclouds -count=1 -v ./internal/eval/... $run_arg
+go test "${go_args[@]}" ./internal/eval/...

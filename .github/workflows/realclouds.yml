@@ -1,0 +1,74 @@
+name: Real-cloud evaluation
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mutandae-realclouds
+  cancel-in-progress: false
+
+# OIDC is used by the cloud login actions. Azure Graph and the current GCP
+# adapter still need the optional static secrets documented in docs/ci.md.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  realclouds:
+    name: Evaluate enabled real clouds
+    if: ${{ vars.ENABLE_AWS_EVAL == 'true' || vars.ENABLE_GCP_EVAL == 'true' || vars.ENABLE_AZURE_EVAL == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # This is an OIDC login for az CLI smoke/authentication. The eval's
+      # Graph client still receives AZURE_CLIENT_SECRET in the final step.
+      - name: Log in to Azure with OIDC
+        if: vars.ENABLE_AZURE_EVAL == 'true'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_AZ_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Configure AWS credentials with OIDC
+        if: vars.ENABLE_AWS_EVAL == 'true'
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_EVAL_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      # This obtains federated ADC credentials for gcloud-based smoke work.
+      # The current stdlib GCP adapter reads a service-account JSON private key,
+      # so GCP_SERVICE_ACCOUNT_KEY_JSON remains an optional static secret below.
+      - name: Authenticate to Google Cloud with WIF
+        if: vars.ENABLE_GCP_EVAL == 'true'
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_EVAL_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Run real-cloud evaluator
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+          GCP_SERVICE_ACCOUNT_KEY_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY_JSON }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_AZ_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          MUTANDAE_EVAL_PREFIX: ${{ vars.MUTANDAE_EVAL_PREFIX || 'mutandae-eval' }}
+        run: MUTANDAE_EVAL=1 go test -tags=realclouds -count=1 ./internal/eval/...

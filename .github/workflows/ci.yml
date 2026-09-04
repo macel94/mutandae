@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/workflows/realclouds.yml'
       - 'cmd/**'
       - 'internal/**'
       - 'pkg/**'
@@ -15,6 +16,11 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'scripts/**'
+      - 'docker-compose.yml'
+      - 'docker-compose.override.yml.example'
+      - 'CHANGELOG.md'
+      - 'docs/ci.md'
+      - 'docs/quickstart.md'
   pull_request:
     branches:
       - main
@@ -221,3 +227,77 @@ jobs:
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "deploy: publish image ${tag}"
           git push
+
+  gofmt:
+    name: Check Go formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Require formatted Go source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(find . -type f -name '*.go' -not -path './vendor/*' -print0 | xargs -0 gofmt -l)"
+
+  race:
+    name: Race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run race tests
+        run: go test -race ./...
+
+  vet:
+    name: Go vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run go vet
+        run: go vet ./...
+
+  compose-check:
+    name: Validate Docker Compose
+    if: runner.os == 'Linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Compose configuration
+        run: docker compose config -q

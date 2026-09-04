@@ -1,0 +1,9 @@
+# Optional local-only override. Copy this file to docker-compose.override.yml
+# when you want the audit JSONL file visible on the host. Keep the directory
+# outside this repository so Docker's build context cannot contain audit data.
+# The default is disposable /tmp storage; set MUTANDAE_AUDIT_DIR to a private
+# directory outside the repository for longer-lived local inspection.
+services:
+  mutandae:
+    volumes:
+      - "${MUTANDAE_AUDIT_DIR:-/tmp/mutandae-data}:/data"
