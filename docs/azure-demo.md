@@ -4,7 +4,18 @@ The Mutandae demo starts from a simulated Azure / Entra ID tenant. Its applicati
 
 The demo now also seeds simulated AWS IAM users and GCP IAM service accounts behind the same adapter boundary, so the default inventory is multi-cloud. This document is the Azure-focused walkthrough; see [multi-cloud-demo.md](multi-cloud-demo.md) for the combined inventory and cross-provider walkthrough.
 
-The Azure portion of the lifecycle inventory is a simulated Azure/Entra tenant and does not require Azure credentials (the default demo also seeds simulated AWS IAM and GCP IAM identities). The optional real-tenant workflow is documented in [azure-integration.md](azure-integration.md) and is isolated in an expiring in-memory session. The hosted preview/live deployments use a temporary Redis snapshot backend with environment-scoped keys and pub/sub invalidation; local runs remain in-memory unless `REDIS_URL` is set. The dashboard references pinned HTMX and Alpine.js assets from jsDelivr for browser interactions. Use `/configuration` to inspect the safe runtime contract and, only when ready, the explicitly opt-in integration panel.
+This walkthrough deliberately follows the credential-less local default: the
+Azure portion is a simulator and the default inventory also seeds simulated AWS
+IAM and GCP IAM identities. The binary also ships real Azure/Entra, AWS IAM, and
+GCP IAM adapters; the composition root selects a real adapter when its
+credential environment is present. Read [providers.md](providers.md) and
+[integration-testing.md](integration-testing.md) before wiring real
+credentials. The separate Configuration-page workflow is documented in
+[azure-integration.md](azure-integration.md) and uses an expiring in-memory
+session. The hosted preview/live deployments use a temporary Redis snapshot
+backend with environment-scoped keys and pub/sub invalidation; local runs
+remain in-memory unless `REDIS_URL` is set. Use `/configuration` to inspect the
+safe runtime contract.
 
 ## Run it
 

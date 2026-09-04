@@ -2,16 +2,18 @@
 
 Mutandae models the Google Cloud IAM boundary with two representations:
 
-1. A synthetic **GCP IAM simulator** whose inventory feeds the multi-cloud
-   governance demo.
-2. A **real-world integration** contract describing exactly what a caller must
-   supply to evaluate a real GCP IAM integration with Mutandae.
+1. A synthetic **GCP IAM simulator** whose inventory feeds the credential-less
+   local multi-cloud demo.
+2. A shipped **real GCP IAM adapter** plus an integration contract describing
+   exactly what a caller must supply to evaluate it against a real project.
 
-This document intentionally does not ship a live Google Cloud client. Like the
-AWS and Azure reflections, the GCP story here is honest about trust boundaries:
-the operator and their IAM policy authorize each mutation; Mutandae never holds
-service-account key material and cannot read a user-managed key's private key
-back from Google Cloud after it is created.
+The standard-library real client is shipped in `internal/provider/gcp.go` and
+uses JWT assertions plus the IAM REST API; the simulator remains the
+credential-less local default. Like the AWS and Azure integrations, the GCP
+story here is honest about trust boundaries: the operator and their IAM policy
+authorize each mutation. The running process holds the operator-supplied key
+material in memory while it calls Google Cloud, but Mutandae never persists it
+and cannot read a user-managed key's private key back after it is created.
 
 ## The simulated GCP IAM adapter
 
@@ -131,10 +133,10 @@ Mutandae references but in which it does not store secrets.
 
 ### What is honest and what is not
 
-This section is a contract, not an implementation. The simulator models
-lifecycle and audit outcomes honestly without containing production GCP
-credentials or pretending to be a real Google Cloud client. Evaluating a real
-integration requires the operator-supplied project id, region, key location,
-and IAM permission set above, plus a review of the service-account policy
-before any production workload is touched, exactly as the AWS and Azure
-integration pages require for their clouds.
+The simulator models lifecycle and audit outcomes honestly without containing
+production GCP credentials, while the shipped real adapter uses only the Go
+standard library rather than a Google Cloud SDK. Evaluating a real integration
+requires the operator-supplied project id, region, key location, and IAM
+permission set above, plus a review of the service-account policy before any
+production workload is touched, exactly as the AWS and Azure integration pages
+require for their clouds.

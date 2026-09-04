@@ -2,8 +2,10 @@
 
 Mutandae has two modes:
 
-1. The public lifecycle dashboard uses a synthetic Azure / Entra adapter and
-   Redis-backed demo state.
+1. The local public lifecycle dashboard defaults to a credential-less Azure /
+   Entra simulator (and uses Redis-backed state only when `REDIS_URL` is set).
+   Hosted deployments may instead select a namespace-scoped real adapter when
+   their deployment credentials are present.
 2. The Configuration page can open a short-lived session against an Azure tenant
    that you control.
 

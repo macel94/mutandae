@@ -6,7 +6,7 @@ The complete native-production delivery, troubleshooting history, attestation
 compatibility findings, and final verification are documented in
 [`docs/native-production-delivery.md`](native-production-delivery.md).
 
-This repository now contains a runnable multi-cloud vertical slice: a versioned μTandae Protocol in `pkg/protocol`, simulated Azure/Entra ID, AWS IAM, and GCP IAM adapters (plus an optional real Microsoft Graph/Key Vault adapter) in `internal/provider`, an in-memory control-plane store in `internal/lifecycle`, and the open-source frontend plus protocol JSON APIs in `internal/web`.
+This repository now contains a runnable multi-cloud vertical slice: a versioned μTandae Protocol in `pkg/protocol`, credential-less simulators plus standard-library real Azure/Entra ID, AWS IAM, and GCP IAM adapters in `internal/provider`, an in-memory control-plane store in `internal/lifecycle`, and the open-source frontend plus protocol JSON APIs in `internal/web`.
 
 ## Product name and pronunciation
 
@@ -22,7 +22,7 @@ The backend uses Go 1.24, `net/http`, `html/template`, `embed`, and the standard
 - server-rendered HTML keeps the public control-plane contract visible;
 - `html/template` escapes interpolated values by default;
 - the same binary serves HTML, fragments, CSS, health checks, and a small JSON inventory endpoint;
-- the in-memory simulator makes the public lifecycle deterministic; the optional real-provider path keeps credentials in a short-lived process-local session and never in the public layer, Redis, or lifecycle snapshots;
+- the in-memory simulators make the public lifecycle deterministic; the opt-in real-provider path keeps credentials in process memory and never in Redis or lifecycle snapshots; the real adapter implementations are public, while deployment credentials remain operator-supplied;
 - the web package defines a small consumer-side `LifecycleService` interface instead of depending on the concrete store;
 - `Clock` and `Logger` are injected as dependencies, with concrete wiring kept in `cmd/mutandae` as the composition root;
 - constructors validate required dependencies and tests use fixed clocks plus fake services, avoiding sleeps and wall-clock assertions.
@@ -78,8 +78,16 @@ It is intentionally not provisioned by the current GitOps change.
 ### Provider adapter boundary
 
 `internal/lifecycle` defines a small consumer-side `Adapter` interface
-(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider` ships three simulated adapters (`azure-entra`, `aws-iam`, `gcp-iam`) composed behind a `MultiProvider` boundary (see [providers.md](providers.md)), plus a standard-library real Azure client for the interactive path. The composite fans discovery out and routes mutations by `ProviderBinding.provider`, so the control plane never needs to know provider mechanics.
-The real client uses Microsoft Graph client credentials, enforces `Application.ReadWrite.OwnedBy` through Graph ownership checks, and optionally writes/reads generated values through an existing Azure Key Vault. It never returns client secrets or Graph tokens from a provider interface, and all real sessions are process-local and TTL-bounded.
+(`Discover`, `Rotate`, `Retire`) that speaks protocol types. `internal/provider`
+ships credential-less simulators and standard-library real adapters for
+`azure-entra`, `aws-iam`, and `gcp-iam`, composed behind a `MultiProvider`
+boundary (see [providers.md](providers.md)). The composition root selects a
+real adapter when its credential environment is present and otherwise uses the
+simulator. The composite fans discovery out and routes mutations by
+`ProviderBinding.provider`, so the control plane never needs to know provider
+mechanics. Provider clients use Microsoft Graph/Key Vault HTTP, AWS IAM SigV4,
+and GCP IAM JWT/REST calls; generated values remain one-time or vault-delivered
+and are never placed in protocol events, snapshots, or logs.
 
 ### Control-plane store
 
@@ -92,7 +100,8 @@ dispatches the adapter, applies the governed expiry from policy, records a
 correlated `RotationRun` plus evidence and `rotation.completed`; on adapter
 failure it returns to active with attention health and a `rotation.failed` run
 so a retry stays possible. `Retire` requires an explicit confirmation, asks the
-adapter to disable the registration, and audits `identity.retired`.
+adapter to decommission the provider credential or object according to its
+provider contract, and audits `identity.retired`.
 
 The canonical transitions are:
 
@@ -100,13 +109,15 @@ The canonical transitions are:
 - `active → renewing → active`;
 - `active → retired`; `renewing → retired` (aborted renewal).
 
-The `cmd/mutandae` package is the composition root: it wires the simulated
-Azure adapter into the store, plus clock, logger, HTTP server, and a bounded
-shutdown policy. Tests inject fakes and fixed time.
+The `cmd/mutandae` package is the composition root: it selects real
+Azure/Entra, AWS IAM, and GCP IAM adapters when their credential environment is
+present and otherwise wires the credential-less simulators. It also wires the
+clock, logger, HTTP server, and bounded shutdown policy. Tests inject fakes and
+fixed time.
 
-The seeded identities cover healthy, expiring-soon, and overdue states so the
-evaluator experience is representative without pretending the simulator is a
-real Azure tenant.
+The simulator-seeded identities cover healthy, expiring-soon, and overdue
+states so the credential-less evaluator experience is representative without
+pretending a cloud mutation occurred.
 
 ## Run locally
 
@@ -151,9 +162,9 @@ docker build -t mutandae:demo .
 docker run --rm -p 8080:8080 mutandae:demo
 ```
 
-The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline uses a read-only root filesystem. The private repository's GitHub Actions workflow builds and publishes `ghcr.io/macel94/mutandae` on trusted pushes to `main`. It also publishes keyless Sigstore/Cosign provenance, a CycloneDX SBOM, and a native-production vulnerability decision so the cluster's Kyverno admission policies can verify the image. This works while the source repository remains private because the attestations are stored with the public GHCR image rather than in GitHub's private-repository attestation storage.
+The image is a static Linux binary running as an unprivileged user. The demo has no writable application state, so the Kubernetes baseline uses a read-only root filesystem. The repository's GitHub Actions workflow builds and publishes `ghcr.io/macel94/mutandae` on trusted pushes to `main`. It also publishes keyless Sigstore/Cosign provenance, a CycloneDX SBOM, and a native-production vulnerability decision so the cluster's Kyverno admission policies can verify the image.
 
-The image receives an immutable source-commit tag and `latest`; the generated deployment commit records the exact tag and digest in `deploy/k3s/kustomization.yaml`. Pull requests run tests and a non-publishing container build. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write` and `id-token: write` permissions; no long-lived registry or signing secret is required. The runtime image is intended to be public in GHCR while the source repository remains private. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
+The image receives an immutable source-commit tag and `latest`; the generated deployment commit records the exact tag and digest in `deploy/k3s/kustomization.yaml`. Pull requests run tests and a non-publishing container build. The workflow uses the ephemeral `GITHUB_TOKEN` with job-scoped `packages: write` and `id-token: write` permissions; no long-lived registry or signing secret is required. The source and runtime image are public; cluster-specific routing, TLS, Flux, and admission configuration remains in the separate `belacca-gitops` repository. Docker base image and GitHub Actions updates are managed weekly by Dependabot.
 
 ## K3s later
 
@@ -163,13 +174,13 @@ Before applying it to the cluster:
 
 1. Wait for the GitHub Actions publish job to push an image and generate the digest-pinning deployment commit.
 2. Use the generated `sha-...` tag and digest from `deploy/k3s/kustomization.yaml`.
-3. Let the private `belacca-gitops` repository own the cluster-specific Ingress, TLS, Flux source, and admission policy configuration.
+3. Let the separate `belacca-gitops` repository own the cluster-specific Ingress, TLS, Flux source, and admission policy configuration.
 4. Replace the in-memory store with persistence before treating the deployment as durable.
-5. The optional real-tenant adapter is enabled only when Redis event publishing is wired; it does not require deployment credentials. Allow reviewed outbound TCP/443 in the owning GitOps repository before enabling it in a cluster. Follow [azure-integration.md](azure-integration.md) and invalidate temporary client credentials after every trial.
+5. Supply real provider credentials only after reviewing the namespace and IAM/RBAC scope. Provider adapters do not require Redis, but the optional Azure interactive integration needs its outbound HTTPS policy and short-lived session. Allow reviewed outbound TCP/443 in the owning GitOps repository before enabling real integrations in a cluster. Follow [azure-integration.md](azure-integration.md) and invalidate temporary credentials after every trial.
 
 ```sh
 kubectl kustomize deploy/k3s
-# Native production is applied by Flux from the private belacca-gitops repository.
+# Native production is applied by Flux from the separate belacca-gitops repository.
 ```
 
-The manifest is a deployment starting point, not a production security or availability claim.
+The manifest is a deployment starting point, not a production security or availability claim. See [docs/security-model.md](security-model.md) before enabling real provider credentials.
