@@ -367,13 +367,11 @@ func (m *integrationManager) InvalidateSecret(ctx context.Context, sessionID, cs
 
 func validateIntegrationEvent(event protocol.AzureIntegrationEvent) error {
 	for key, value := range event.Details {
-		lowerKey := strings.ToLower(key)
-		if strings.Contains(lowerKey, "secret_text") || strings.Contains(lowerKey, "client_secret") || strings.Contains(lowerKey, "password") || strings.Contains(lowerKey, "access_token") || lowerKey == "token" {
+		if sensitiveAuditKey(key) {
 			return errors.New("integration event contains a forbidden secret-bearing detail")
 		}
-		lowerValue := strings.ToLower(value)
-		if strings.Contains(lowerValue, "bearer ") {
-			return errors.New("integration event contains a bearer token")
+		if redactAuditText(value) != value {
+			return errors.New("integration event contains secret-bearing text")
 		}
 	}
 	return nil

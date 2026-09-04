@@ -116,6 +116,17 @@ func main() {
 		storeOptions = append(storeOptions, lifecycle.WithCommonVault(commonVault))
 		provisionFeatures = append(provisionFeatures, "vault:cluster")
 	}
+	if auditPath := strings.TrimSpace(os.Getenv("MUTANDAE_AUDIT_FILE")); auditPath != "" {
+		auditSink, sinkErr := lifecycle.NewFileAuditSink(auditPath)
+		if sinkErr != nil {
+			log.Fatalf("create lifecycle audit sink: %v", sinkErr)
+		}
+		storeOptions = append(storeOptions,
+			lifecycle.WithAuditSink(auditSink),
+			lifecycle.WithAuditLogger(log.Printf),
+		)
+		log.Printf("durable lifecycle audit enabled at %s", auditPath)
+	}
 
 	adapter, err := provider.NewMultiProvider(
 		azureAdapter,
@@ -143,6 +154,52 @@ func main() {
 	}
 	if err != nil {
 		log.Fatalf("initialise control plane: %v", err)
+	}
+
+	var sweeper *lifecycle.Sweeper
+	var workerCancel context.CancelFunc
+	workerDone := make(chan struct{})
+	if sweepInterval, enabled := envDuration("MUTANDAE_SWEEP_INTERVAL"); enabled {
+		sweepJitter := sweepInterval / 10
+		if raw := strings.TrimSpace(os.Getenv("MUTANDAE_SWEEP_JITTER")); raw != "" {
+			parsed, parseErr := time.ParseDuration(raw)
+			if parseErr != nil || parsed < 0 {
+				log.Printf("invalid MUTANDAE_SWEEP_JITTER=%q; using %s", raw, sweepJitter)
+			} else {
+				sweepJitter = parsed
+			}
+		}
+		var lease lifecycle.LeaseManager
+		if redisClient != nil {
+			leaseTTL := sweepInterval*2 + sweepJitter
+			if leaseTTL <= 0 {
+				leaseTTL = 2 * sweepInterval
+			}
+			lease, err = lifecycle.NewRedisLeaseManager(redisClient, redisPrefix()+":lifecycle:sweep:lease", instanceID(startedAt), leaseTTL)
+		} else {
+			lease = lifecycle.NewInMemoryLeaseManager()
+		}
+		if err != nil {
+			log.Fatalf("create lifecycle sweep lease: %v", err)
+		}
+		sweeper, err = lifecycle.NewSweeper(lifecycle.SweeperConfig{
+			Store: store, Clock: now, Interval: sweepInterval, Jitter: sweepJitter,
+			Lease: lease, Logger: log.Printf, Concurrency: 2,
+		})
+		if err != nil {
+			log.Fatalf("create lifecycle sweeper: %v", err)
+		}
+		workerContext, cancel := context.WithCancel(context.Background())
+		workerCancel = cancel
+		go func() {
+			defer close(workerDone)
+			if runErr := sweeper.Run(workerContext); runErr != nil {
+				log.Printf("lifecycle sweeper stopped: %v", runErr)
+			}
+		}()
+		log.Printf("scheduled lifecycle sweeps enabled: interval=%s jitter=%s", sweepInterval, sweepJitter)
+	} else {
+		close(workerDone)
 	}
 	var integration lifecycle.IntegrationService
 	var events lifecycle.EventPublisher
@@ -232,6 +289,14 @@ func main() {
 	if integration != nil {
 		integration.Close()
 	}
+	if workerCancel != nil {
+		workerCancel()
+		select {
+		case <-workerDone:
+		case <-time.After(2 * time.Second):
+			log.Printf("timed out waiting for lifecycle sweeper shutdown")
+		}
+	}
 	if err := store.Close(); err != nil {
 		log.Printf("close lifecycle store: %v", err)
 	}
@@ -285,6 +350,27 @@ func envString(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envDuration(name string) (time.Duration, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		log.Printf("invalid %s=%q; scheduled worker remains disabled", name, raw)
+		return 0, false
+	}
+	return duration, true
+}
+
+func instanceID(startedAt time.Time) string {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "mutandae"
+	}
+	return fmt.Sprintf("%s:%d:%d", host, os.Getpid(), startedAt.UnixNano())
 }
 
 func envFloat(name string, fallback float64) float64 {

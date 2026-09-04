@@ -48,7 +48,7 @@ func (p *RedisEventPublisher) Publish(ctx context.Context, event protocol.AzureI
 	if event.ID == "" || event.CorrelationID == "" || event.Type == "" {
 		return errors.New("event id, type, and correlation id are required")
 	}
-	payload, err := json.Marshal(event)
+	payload, err := json.Marshal(redactIntegrationEvent(event))
 	if err != nil {
 		return fmt.Errorf("encode integration event: %w", err)
 	}
@@ -76,6 +76,6 @@ type MemoryEventPublisher struct {
 func (p *MemoryEventPublisher) Publish(_ context.Context, event protocol.AzureIntegrationEvent) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.Events = append(p.Events, event)
+	p.Events = append(p.Events, redactIntegrationEvent(event))
 	return nil
 }

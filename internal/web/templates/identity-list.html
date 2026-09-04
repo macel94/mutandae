@@ -54,5 +54,11 @@
 {{ define "identity-list" }}
 <div id="identity-list" class="table-wrap">
   {{ template "identity-table" . }}
+  {{ if .Retired.Identities }}
+  <details class="retired-archive">
+    <summary>Show retired identities ({{ len .Retired.Identities }})</summary>
+    <div class="retired-archive-table">{{ template "identity-table" .Retired }}</div>
+  </details>
+  {{ end }}
 </div>
 {{ end }}

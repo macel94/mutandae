@@ -21,6 +21,7 @@ coverage/
 .turbo/
 
 # Local data
+data/
 *.db
 *.sqlite
 *.sqlite3
