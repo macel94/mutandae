@@ -59,9 +59,11 @@ Boundary](docs/open-core-boundary.md) for the intended split.
 > retired control-plane record and its audit history (it does not issue another
 > provider API mutation). Treat the rotate/retire/delete workflow as
 > destructive. Use disposable identities, least-privileged credentials, and a
-> narrow scope allow-list. Never expose the unauthenticated HTTP port directly
-> to the internet. Until the planned auth workstream (OIDC, API tokens, and
-> RBAC) lands, bind to localhost or a private VPN, or put the service behind a
+> narrow scope allow-list. Authentication modes (OIDC SSO and scoped API
+> tokens with RBAC) ship in this release; the hosted public demo intentionally
+> runs `MUTANDAE_AUTH_MODE=none` (rate-limited, scope-limited to the synthetic
+> `mutandae-demo-*` namespace). A private deployment governing real identities
+> should set `MUTANDAE_AUTH_MODE=oidc` or `token`, or put the service behind a
 > trusted reverse-proxy/SSO boundary.
 >
 > Demo-mode adapters restrict governed names to the `mutandae-demo-*` namespace;

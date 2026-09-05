@@ -47,6 +47,11 @@ where releases are cut.
 
 ### Fixed
 
+- The live-environment authentication policy no longer refuses to start when
+  `MUTANDAE_AUTH_MODE=none`: the hosted public demo runs open by design
+  (rate-limited, scoped to the `mutandae-demo-*` namespace), so an
+  unauthenticated live deployment now emits a loud startup warning instead of
+  failing the rollout. Invalid auth modes remain hard errors.
 - Retired identities no longer inflate active attention counts or show stale
   expiry state, and permanent deletion remains distinct from the audit trail.
 - AWS retirement tolerates an already-removed IAM user, while GCP key creation

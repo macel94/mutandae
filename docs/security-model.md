@@ -114,9 +114,13 @@ state-changing requests, and provisioning; loopback is exempt for health probes,
 local development, and tests. Rate limiting is an abuse control, not identity,
 authorization, or tenant isolation.
 
-An authentication and authorization mode using OIDC, API tokens, and RBAC is
-**in progress** in the auth workstream and is not part of this release. Until
-it is available and reviewed:
+An authentication and authorization mode using OIDC, API tokens, and RBAC
+**ships in this release** (`MUTANDAE_AUTH_MODE=oidc|token`). The hosted public
+demo deliberately runs with `MUTANDAE_AUTH_MODE=none`: it is rate-limited by
+client IP and scoped to the synthetic `mutandae-demo-*` namespace, and open
+access is the point of the demo. A live deployment with `auth=none` emits a
+loud startup warning. Until you enable an auth mode or put the listener behind
+a boundary that enforces identity:
 
 - bind local use to `127.0.0.1` or a private interface;
 - put any shared deployment behind a VPN or a trusted reverse proxy with SSO;

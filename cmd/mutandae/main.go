@@ -35,8 +35,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("read authentication configuration: %v", err)
 	}
-	if err := config.ValidateAuthMode(environment, authConfig.Mode); err != nil {
+	warnings, err := config.ValidateAuthMode(environment, authConfig.Mode)
+	if err != nil {
 		log.Fatalf("validate authentication configuration: %v", err)
+	}
+	for _, warning := range warnings {
+		log.Printf("WARNING: %s", warning)
 	}
 	tenantID := envString("MUTANDAE_TENANT", "8c0e6c1a-mutandae-4c3b-9f2d-000000000000-demo")
 	awsAccountID := envString("MUTANDAE_AWS_ACCOUNT", "123456789012")

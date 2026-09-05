@@ -10,11 +10,14 @@ import (
 	"github.com/mutandae/mutandae/pkg/protocol"
 )
 
-// ValidateAuthMode validates the deployment authentication mode and enforces
-// the live-environment fail-closed rule. The web package owns the protocol
-// implementation; keeping this policy here lets the composition root validate
-// it before wiring providers or starting an HTTP server.
-func ValidateAuthMode(environment, mode string) error {
+// ValidateAuthMode validates the deployment authentication mode. An unknown
+// mode is an error; MUTANDAE_AUTH_MODE=none on a live deployment is a
+// deliberate configuration used by the hosted public demo — it is returned as
+// a loud warning the composition root must log at startup, not as an error.
+// The web package owns the protocol implementation; keeping this policy here
+// lets the composition root validate it before wiring providers or starting
+// an HTTP server.
+func ValidateAuthMode(environment, mode string) (warnings []string, err error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		mode = "none"
@@ -22,12 +25,17 @@ func ValidateAuthMode(environment, mode string) error {
 	switch mode {
 	case "none", "oidc", "token":
 	default:
-		return fmt.Errorf("MUTANDAE_AUTH_MODE must be none, oidc, or token (got %q)", mode)
+		return nil, fmt.Errorf("MUTANDAE_AUTH_MODE must be none, oidc, or token (got %q)", mode)
 	}
+	warnings = []string{}
 	if strings.EqualFold(strings.TrimSpace(environment), "live") && mode == "none" {
-		return fmt.Errorf("MUTANDAE_AUTH_MODE=none is not allowed in the live environment")
+		warnings = append(warnings,
+			"MUTANDAE_AUTH_MODE=none: this deployment accepts unauthenticated traffic. "+
+				"The hosted demo runs this way on purpose (rate-limited, scoped to the "+
+				"mutandae-demo-* namespace). Any deployment governing real identities "+
+				"beyond that scope must set MUTANDAE_AUTH_MODE=oidc or token.")
 	}
-	return nil
+	return warnings, nil
 }
 
 // ProviderDescriptor names one wired provider adapter and the public tenant
